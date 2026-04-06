@@ -20,29 +20,85 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo }) {
   };
 }
 
-export function decide({ remainingMinutes, edgeUp, edgeDown, modelUp = null, modelDown = null }) {
-  const phase = remainingMinutes > 10 ? "EARLY" : remainingMinutes > 5 ? "MID" : "LATE";
+/**
+ * Decision engine optimized for 5-minute markets.
+ * More aggressive thresholds since 5m windows are faster-paced.
+ */
+export function decide({
+  remainingMinutes,
+  edgeUp,
+  edgeDown,
+  modelUp = null,
+  modelDown = null,
+  confidence = null,
+  indicatorCount = 0,
+  windowMinutes = 5,
+  regime = null
+}) {
+  // Phase determination for 5min markets
+  const timeRatio = remainingMinutes / windowMinutes;
+  const phase = timeRatio > 0.6 ? "EARLY" : timeRatio > 0.2 ? "MID" : "LATE";
 
-  const threshold = phase === "EARLY" ? 0.05 : phase === "MID" ? 0.1 : 0.2;
+  // ──── THRESHOLDS adapted for 5m markets ────
+  // Shorter window = accept lower edge but require higher confidence
+  const edgeThreshold = phase === "EARLY" ? 0.04 : phase === "MID" ? 0.06 : 0.12;
+  const minProb = phase === "EARLY" ? 0.55 : phase === "MID" ? 0.58 : 0.62;
 
-  const minProb = phase === "EARLY" ? 0.55 : phase === "MID" ? 0.6 : 0.65;
+  // Minimum active indicators to trust the signal
+  const minIndicators = phase === "LATE" ? 4 : 3;
 
   if (edgeUp === null || edgeDown === null) {
-    return { action: "NO_TRADE", side: null, phase, reason: "missing_market_data" };
+    return { action: "NO_TRADE", side: null, phase, reason: "missing_market_data", strength: null, edge: null };
   }
 
   const bestSide = edgeUp > edgeDown ? "UP" : "DOWN";
   const bestEdge = bestSide === "UP" ? edgeUp : edgeDown;
   const bestModel = bestSide === "UP" ? modelUp : modelDown;
 
-  if (bestEdge < threshold) {
-    return { action: "NO_TRADE", side: null, phase, reason: `edge_below_${threshold}` };
+  // ──── TREND FILTER (Avoid counter-trading strong trends) ────
+  if (bestSide === "DOWN" && regime === "TREND_UP") {
+    return { action: "NO_TRADE", side: null, phase, reason: "anti_trend_up", strength: null, edge: bestEdge };
+  }
+  if (bestSide === "UP" && regime === "TREND_DOWN") {
+    return { action: "NO_TRADE", side: null, phase, reason: "anti_trend_down", strength: null, edge: bestEdge };
+  }
+
+  // ──── FILTERS ────
+  if (remainingMinutes < 0.3) {
+    return { action: "NO_TRADE", side: null, phase, reason: "too_late", strength: null, edge: bestEdge };
+  }
+
+  if (indicatorCount > 0 && indicatorCount < minIndicators) {
+    return { action: "NO_TRADE", side: null, phase, reason: `insufficient_indicators (${indicatorCount}/${minIndicators})`, strength: null, edge: bestEdge };
+  }
+
+  if (bestEdge < edgeThreshold) {
+    return { action: "NO_TRADE", side: null, phase, reason: `edge_below_${edgeThreshold.toFixed(2)}`, strength: null, edge: bestEdge };
   }
 
   if (bestModel !== null && bestModel < minProb) {
-    return { action: "NO_TRADE", side: null, phase, reason: `prob_below_${minProb}` };
+    return { action: "NO_TRADE", side: null, phase, reason: `prob_below_${minProb.toFixed(2)}`, strength: null, edge: bestEdge };
   }
 
-  const strength = bestEdge >= 0.2 ? "STRONG" : bestEdge >= 0.1 ? "GOOD" : "OPTIONAL";
-  return { action: "ENTER", side: bestSide, phase, strength, edge: bestEdge };
+  // ──── STRENGTH CLASSIFICATION ────
+  let strength;
+  if (bestEdge >= 0.20) strength = "STRONG";
+  else if (bestEdge >= 0.12) strength = "GOOD";
+  else if (bestEdge >= 0.06) strength = "MODERATE";
+  else strength = "WEAK";
+
+  // Boost strength if confidence is high
+  if (confidence !== null && confidence > 0.5 && strength === "MODERATE") {
+    strength = "GOOD";
+  }
+
+  return {
+    action: "ENTER",
+    side: bestSide,
+    phase,
+    strength,
+    edge: bestEdge,
+    confidence,
+    reason: `edge=${bestEdge.toFixed(3)} model=${bestModel?.toFixed(3) ?? "-"}`
+  };
 }

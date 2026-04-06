@@ -16,9 +16,15 @@ import { computeSessionVwap, computeVwapSeries } from "./indicators/vwap.js";
 import { computeRsi, sma, slopeLast } from "./indicators/rsi.js";
 import { computeMacd } from "./indicators/macd.js";
 import { computeHeikenAshi, countConsecutive } from "./indicators/heikenAshi.js";
+import { computeBollingerBands, detectBBSqueeze } from "./indicators/bollingerBands.js";
+import { detectEmaCross } from "./indicators/emaCross.js";
+import { computeRoc, computeAtr, computeMomentum, detectVolumeSpike, computeVelocity } from "./indicators/momentum.js";
+import { computeStochRsi } from "./indicators/stochRsi.js";
+import { computeSupertrend } from "./indicators/supertrend.js";
 import { detectRegime } from "./engines/regime.js";
 import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
 import { computeEdge, decide } from "./engines/edge.js";
+import { shouldAutoTrade, executeTrade, getAutoTradeStatus, resetMarketState } from "./engines/autoTrade.js";
 import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils.js";
 import { startBinanceTradeStream } from "./data/binanceWs.js";
 import fs from "node:fs";
@@ -49,23 +55,38 @@ function fmtTimeLeft(mins) {
 
 const ANSI = {
   reset: "\x1b[0m",
+  bold: "\x1b[1m",
   red: "\x1b[31m",
   green: "\x1b[32m",
   yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  magenta: "\x1b[35m",
+  cyan: "\x1b[36m",
   lightRed: "\x1b[91m",
+  lightGreen: "\x1b[92m",
+  lightYellow: "\x1b[93m",
   gray: "\x1b[90m",
   white: "\x1b[97m",
-  dim: "\x1b[2m"
+  dim: "\x1b[2m",
+  bgRed: "\x1b[41m",
+  bgGreen: "\x1b[42m",
+  bgYellow: "\x1b[43m",
+  bgBlue: "\x1b[44m",
 };
 
 function screenWidth() {
   const w = Number(process.stdout?.columns);
-  return Number.isFinite(w) && w >= 40 ? w : 80;
+  return Number.isFinite(w) && w >= 40 ? w : 100;
 }
 
 function sepLine(ch = "─") {
   const w = screenWidth();
-  return `${ANSI.white}${ch.repeat(w)}${ANSI.reset}`;
+  return `${ANSI.gray}${ch.repeat(w)}${ANSI.reset}`;
+}
+
+function sepDoubleLine() {
+  const w = screenWidth();
+  return `${ANSI.white}${"═".repeat(w)}${ANSI.reset}`;
 }
 
 function renderScreen(text) {
@@ -96,14 +117,20 @@ function centerText(text, width) {
   return " ".repeat(left) + text + " ".repeat(right);
 }
 
-const LABEL_W = 16;
+function rightAlign(text, width) {
+  const visible = stripAnsi(text).length;
+  if (visible >= width) return text;
+  return " ".repeat(width - visible) + text;
+}
+
+const LABEL_W = 18;
 function kv(label, value) {
   const l = padLabel(String(label), LABEL_W);
-  return `${l}${value}`;
+  return `  ${l}${value}`;
 }
 
 function section(title) {
-  return `${ANSI.white}${title}${ANSI.reset}`;
+  return `${ANSI.bold}${ANSI.cyan} ◆ ${title}${ANSI.reset}`;
 }
 
 function colorPriceLine({ label, price, prevPrice, decimals = 0, prefix = "" }) {
@@ -119,10 +146,10 @@ function colorPriceLine({ label, price, prevPrice, decimals = 0, prefix = "" }) 
   if (prev !== null && Number.isFinite(prev) && Number.isFinite(p) && p !== prev) {
     if (p > prev) {
       color = ANSI.green;
-      arrow = " ↑";
+      arrow = " ▲";
     } else {
       color = ANSI.red;
-      arrow = " ↓";
+      arrow = " ▼";
     }
   }
 
@@ -150,14 +177,6 @@ function formatNarrativeValue(label, value, narrative) {
 function narrativeFromSign(x) {
   if (x === null || x === undefined || !Number.isFinite(Number(x)) || Number(x) === 0) return "NEUTRAL";
   return Number(x) > 0 ? "LONG" : "SHORT";
-}
-
-function narrativeFromRsi(rsi) {
-  if (rsi === null || rsi === undefined || !Number.isFinite(Number(rsi))) return "NEUTRAL";
-  const v = Number(rsi);
-  if (v >= 55) return "LONG";
-  if (v <= 45) return "SHORT";
-  return "NEUTRAL";
 }
 
 function narrativeFromSlope(slope) {
@@ -190,8 +209,8 @@ function getBtcSession(now = new Date()) {
   const inEurope = h >= 7 && h < 16;
   const inUs = h >= 13 && h < 22;
 
-  if (inEurope && inUs) return "Europe/US overlap";
-  if (inAsia && inEurope) return "Asia/Europe overlap";
+  if (inEurope && inUs) return "EU/US Overlap";
+  if (inAsia && inEurope) return "Asia/EU Overlap";
   if (inAsia) return "Asia";
   if (inEurope) return "Europe";
   if (inUs) return "US";
@@ -221,18 +240,9 @@ function safeFileSlug(x) {
 
 function extractNumericFromMarket(market) {
   const directKeys = [
-    "priceToBeat",
-    "price_to_beat",
-    "strikePrice",
-    "strike_price",
-    "strike",
-    "threshold",
-    "thresholdPrice",
-    "threshold_price",
-    "targetPrice",
-    "target_price",
-    "referencePrice",
-    "reference_price"
+    "priceToBeat", "price_to_beat", "strikePrice", "strike_price",
+    "strike", "threshold", "thresholdPrice", "threshold_price",
+    "targetPrice", "target_price", "referencePrice", "reference_price"
   ];
 
   for (const k of directKeys) {
@@ -281,7 +291,7 @@ const marketCache = {
   fetchedAtMs: 0
 };
 
-async function resolveCurrentBtc15mMarket() {
+async function resolveCurrentBtc5mMarket() {
   if (CONFIG.polymarket.marketSlug) {
     return await fetchMarketBySlug(CONFIG.polymarket.marketSlug);
   }
@@ -293,7 +303,13 @@ async function resolveCurrentBtc15mMarket() {
     return marketCache.market;
   }
 
-  const events = await fetchLiveEventsBySeriesId({ seriesId: CONFIG.polymarket.seriesId, limit: 25 });
+  let events;
+  if (CONFIG.polymarket.seriesId) {
+    events = await fetchLiveEventsBySeriesId({ seriesId: CONFIG.polymarket.seriesId, limit: 25 });
+  } else {
+    events = await fetchLiveEventsBySeriesId({ seriesId: null, limit: 25 });
+  }
+
   const markets = flattenEventMarkets(events);
   const picked = pickLatestLiveMarket(markets);
 
@@ -303,9 +319,16 @@ async function resolveCurrentBtc15mMarket() {
 }
 
 async function fetchPolymarketSnapshot() {
-  const market = await resolveCurrentBtc15mMarket();
+  const market = await resolveCurrentBtc5mMarket();
 
   if (!market) return { ok: false, reason: "market_not_found" };
+  
+  // Safeguard: Check if the market is actually closed or past its end date
+  const nowMs = Date.now();
+  const endMs = market.endDate ? new Date(market.endDate).getTime() : null;
+  if (market.closed || market.resolved || (endMs && nowMs >= endMs)) {
+    return { ok: false, reason: "market_closed", market };
+  }
 
   const outcomes = Array.isArray(market.outcomes) ? market.outcomes : (typeof market.outcomes === "string" ? JSON.parse(market.outcomes) : []);
   const outcomePrices = Array.isArray(market.outcomePrices)
@@ -395,6 +418,39 @@ async function fetchPolymarketSnapshot() {
   };
 }
 
+// ──── CONFIDENCE BAR ────
+function confidenceBar(confidence, width = 20) {
+  const filled = Math.round(confidence * width);
+  const empty = width - filled;
+  const color = confidence > 0.6 ? ANSI.green : confidence > 0.4 ? ANSI.yellow : ANSI.red;
+  return `${color}${"█".repeat(filled)}${ANSI.gray}${"░".repeat(empty)}${ANSI.reset}`;
+}
+
+// ──── STRENGTH BADGE ────
+function strengthBadge(strength) {
+  const badges = {
+    STRONG: `${ANSI.bgGreen}${ANSI.bold} STRONG ${ANSI.reset}`,
+    GOOD: `${ANSI.bgBlue}${ANSI.bold} GOOD ${ANSI.reset}`,
+    MODERATE: `${ANSI.bgYellow}${ANSI.bold} MODERATE ${ANSI.reset}`,
+    WEAK: `${ANSI.gray}${ANSI.dim} WEAK ${ANSI.reset}`,
+  };
+  return badges[strength] || `${ANSI.gray}${strength || "-"}${ANSI.reset}`;
+}
+
+// ──── REGIME BADGE ────
+function regimeBadge(regime) {
+  const badges = {
+    TREND_UP: `${ANSI.green}▲ TREND UP${ANSI.reset}`,
+    TREND_DOWN: `${ANSI.red}▼ TREND DOWN${ANSI.reset}`,
+    BREAKOUT_UP: `${ANSI.lightGreen}⚡ BREAKOUT UP${ANSI.reset}`,
+    BREAKOUT_DOWN: `${ANSI.lightRed}⚡ BREAKOUT DOWN${ANSI.reset}`,
+    SQUEEZE: `${ANSI.magenta}◉ SQUEEZE${ANSI.reset}`,
+    RANGE: `${ANSI.yellow}↔ RANGE${ANSI.reset}`,
+    CHOP: `${ANSI.gray}≈ CHOP${ANSI.reset}`,
+  };
+  return badges[regime] || `${ANSI.gray}${regime}${ANSI.reset}`;
+}
+
 async function main() {
   const binanceStream = startBinanceTradeStream({ symbol: CONFIG.symbol });
   const polymarketLiveStream = startPolymarketChainlinkPriceStream({});
@@ -403,21 +459,27 @@ async function main() {
   let prevSpotPrice = null;
   let prevCurrentPrice = null;
   let priceToBeatState = { slug: null, value: null, setAtMs: null };
+  let lastAutoTradeResult = null;
 
   const header = [
-    "timestamp",
-    "entry_minute",
-    "time_left_min",
-    "regime",
-    "signal",
-    "model_up",
-    "model_down",
-    "mkt_up",
-    "mkt_down",
-    "edge_up",
-    "edge_down",
-    "recommendation"
+    "timestamp", "entry_minute", "time_left_min", "regime", "signal",
+    "model_up", "model_down", "mkt_up", "mkt_down",
+    "edge_up", "edge_down", "recommendation", "confidence",
+    "bb_percentB", "ema_signal", "roc", "velocity", "atr_pct"
   ];
+
+  console.clear();
+  console.log(`\n  ${ANSI.bold}${ANSI.cyan}╔══════════════════════════════════════════════╗${ANSI.reset}`);
+  console.log(`  ${ANSI.bold}${ANSI.cyan}║   Polymarket BTC 5m Assistant - Starting...  ║${ANSI.reset}`);
+  console.log(`  ${ANSI.bold}${ANSI.cyan}╚══════════════════════════════════════════════╝${ANSI.reset}\n`);
+  console.log(`  ${ANSI.gray}Window: ${CONFIG.candleWindowMinutes}min | Poll: ${CONFIG.pollIntervalMs}ms${ANSI.reset}`);
+  console.log(`  ${ANSI.gray}Series: ${CONFIG.polymarket.seriesSlug}${ANSI.reset}`);
+  if (CONFIG.autoTrade.enabled) {
+    console.log(`  ${ANSI.yellow}⚡ AUTO-TRADE: ${CONFIG.autoTrade.dryRun ? "DRY-RUN" : "LIVE"} | Amount: $${CONFIG.autoTrade.tradeAmountUsd}${ANSI.reset}`);
+  }
+  console.log(`  ${ANSI.gray}Connecting to data feeds...${ANSI.reset}\n`);
+
+  await sleep(2000);
 
   while (true) {
     const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
@@ -446,6 +508,33 @@ async function main() {
         fetchPolymarketSnapshot()
       ]);
 
+      if (!poly.ok) {
+        const w = screenWidth();
+        const waitLines = [
+          "",
+          `  ${ANSI.bold}${ANSI.cyan}╔${"═".repeat(w - 4)}╗${ANSI.reset}`,
+          `  ${ANSI.bold}${ANSI.cyan}║${ANSI.reset}${centerText(`${ANSI.bold}${ANSI.white} POLYMARKET BTC 5m ASSISTANT ${ANSI.reset}`, w - 4)}${ANSI.bold}${ANSI.cyan}║${ANSI.reset}`,
+          `  ${ANSI.bold}${ANSI.cyan}╚${"═".repeat(w - 4)}╝${ANSI.reset}`,
+          "",
+          "",
+          centerText(`${ANSI.yellow}${ANSI.bold}⚠️  MERCADO FECHADO / EM TRANSIÇÃO  ⚠️${ANSI.reset}`, w),
+          centerText(`${ANSI.gray}Aguardando a abertura do proximo candle de 5 minutos...${ANSI.reset}`, w),
+          "",
+          "",
+          centerText(`${ANSI.cyan}BTC Price: $${formatNumber(lastPrice, 2)}${ANSI.reset}`, w),
+          "",
+          "",
+          centerText(`${ANSI.gray}Motivo: ${poly.reason}${ANSI.reset}`, w),
+          "",
+          `  ${sepLine()}`,
+          centerText(`${ANSI.dim}${ANSI.gray}Tentando reconectar em ${CONFIG.pollIntervalMs / 1000}s...${ANSI.reset}`, w),
+          ""
+        ];
+        renderScreen(waitLines.join("\n"));
+        await sleep(CONFIG.pollIntervalMs);
+        continue;
+      }
+
       const settlementMs = poly.ok && poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
       const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
 
@@ -454,6 +543,7 @@ async function main() {
       const candles = klines1m;
       const closes = candles.map((c) => c.close);
 
+      // ──── CORE INDICATORS ────
       const vwap = computeSessionVwap(candles);
       const vwapSeries = computeVwapSeries(candles);
       const vwapNow = vwapSeries[vwapSeries.length - 1];
@@ -485,15 +575,31 @@ async function main() {
         ? closes[closes.length - 1] < vwapNow && closes[closes.length - 2] > vwapSeries[vwapSeries.length - 2]
         : false;
 
+      // ──── ADVANCED INDICATORS ────
+      const bbData = computeBollingerBands(closes, CONFIG.bbPeriod, CONFIG.bbStdDev);
+      const bbSqueeze = detectBBSqueeze(closes, CONFIG.bbPeriod, CONFIG.bbStdDev, 20);
+      const emaCross = detectEmaCross(closes, CONFIG.emaFast, CONFIG.emaSlow);
+      const roc = computeRoc(closes, CONFIG.rocPeriod);
+      const atr = computeAtr(candles, CONFIG.atrPeriod);
+      const momentum = computeMomentum(closes, CONFIG.rocPeriod);
+      const volumeSpike = detectVolumeSpike(candles, 3, 30);
+      const velocity = computeVelocity(closes, 5);
+      const stochRsi = computeStochRsi(rsiSeries, CONFIG.stochRsiPeriod, CONFIG.stochRsiK, CONFIG.stochRsiD);
+      const supertrend = computeSupertrend(candles, CONFIG.supertrendPeriod, CONFIG.supertrendMultiplier);
+
+      // ──── REGIME ────
       const regimeInfo = detectRegime({
         price: lastPrice,
         vwap: vwapNow,
         vwapSlope,
         vwapCrossCount,
         volumeRecent,
-        volumeAvg
+        volumeAvg,
+        atr,
+        bbSqueeze
       });
 
+      // ──── SCORING ────
       const scored = scoreDirection({
         price: lastPrice,
         vwap: vwapNow,
@@ -503,7 +609,17 @@ async function main() {
         macd,
         heikenColor: consec.color,
         heikenCount: consec.count,
-        failedVwapReclaim
+        failedVwapReclaim,
+        bbData,
+        emaCross,
+        roc,
+        momentum,
+        volumeSpike,
+        atr,
+        bbSqueeze,
+        velocity,
+        stochRsi,
+        supertrend
       });
 
       const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, CONFIG.candleWindowMinutes);
@@ -512,15 +628,58 @@ async function main() {
       const marketDown = poly.ok ? poly.prices.down : null;
       const edge = computeEdge({ modelUp: timeAware.adjustedUp, modelDown: timeAware.adjustedDown, marketYes: marketUp, marketNo: marketDown });
 
-      const rec = decide({ remainingMinutes: timeLeftMin, edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, modelUp: timeAware.adjustedUp, modelDown: timeAware.adjustedDown });
+      const rec = decide({
+        remainingMinutes: timeLeftMin,
+        edgeUp: edge.edgeUp,
+        edgeDown: edge.edgeDown,
+        modelUp: timeAware.adjustedUp,
+        modelDown: timeAware.adjustedDown,
+        confidence: scored.confidence,
+        indicatorCount: scored.indicatorCount,
+        windowMinutes: CONFIG.candleWindowMinutes,
+        regime: regimeInfo.regime
+      });
 
+      // ──── AUTO-TRADE ────
+      const tradeCheck = shouldAutoTrade({
+        enabled: CONFIG.autoTrade.enabled,
+        decision: rec,
+        timeLeftMin,
+        modelUp: timeAware.adjustedUp,
+        modelDown: timeAware.adjustedDown,
+        marketSlug: poly.ok ? poly.market?.slug : null,
+      });
+
+      if (tradeCheck.trade) {
+        const currentPrice = chainlink?.price ?? null;
+        const priceToBeat = priceToBeatState.slug === (poly.ok ? poly.market?.slug : null) ? priceToBeatState.value : null;
+
+        lastAutoTradeResult = await executeTrade({
+          side: tradeCheck.side,
+          amount: tradeCheck.amount,
+          edge: tradeCheck.edge,
+          confidence: tradeCheck.confidence,
+          strength: tradeCheck.strength,
+          phase: rec.phase,
+          timeLeftMin,
+          currentPrice,
+          priceToBeat,
+          marketSlug: poly.ok ? poly.market?.slug : null,
+          tokenId: tradeCheck.side === "UP" ? poly.tokens.upTokenId : poly.tokens.downTokenId,
+          outcomePrice: tradeCheck.side === "UP" ? poly.prices.up : poly.prices.down
+        });
+      }
+
+      const autoTradeStatus = getAutoTradeStatus();
+
+      // ──── BUILD DISPLAY ────
       const vwapSlopeLabel = vwapSlope === null ? "-" : vwapSlope > 0 ? "UP" : vwapSlope < 0 ? "DOWN" : "FLAT";
 
       const macdLabel = macd === null
         ? "-"
         : macd.hist < 0
-          ? (macd.histDelta !== null && macd.histDelta < 0 ? "bearish (expanding)" : "bearish")
-          : (macd.histDelta !== null && macd.histDelta > 0 ? "bullish (expanding)" : "bullish");
+          ? (macd.histDelta !== null && macd.histDelta < 0 ? "Bearish ↘" : "Bearish (converging)")
+          : (macd.histDelta !== null && macd.histDelta > 0 ? "Bullish ↗" : "Bullish (converging)");
 
       const lastCandle = klines1m.length ? klines1m[klines1m.length - 1] : null;
       const lastClose = lastCandle?.close ?? null;
@@ -539,43 +698,12 @@ async function main() {
       const predictNarrative = (pLong !== null && pShort !== null && Number.isFinite(pLong) && Number.isFinite(pShort))
         ? (pLong > pShort ? "LONG" : pShort > pLong ? "SHORT" : "NEUTRAL")
         : "NEUTRAL";
-      const predictValue = `${ANSI.green}LONG${ANSI.reset} ${ANSI.green}${formatProbPct(pLong, 0)}${ANSI.reset} / ${ANSI.red}SHORT${ANSI.reset} ${ANSI.red}${formatProbPct(pShort, 0)}${ANSI.reset}`;
-      const predictLine = `Predict: ${predictValue}`;
+
+      const predictValue = `${ANSI.green}LONG${ANSI.reset} ${ANSI.bold}${ANSI.green}${formatProbPct(pLong, 1)}${ANSI.reset} / ${ANSI.red}SHORT${ANSI.reset} ${ANSI.bold}${ANSI.red}${formatProbPct(pShort, 1)}${ANSI.reset}`;
 
       const marketUpStr = `${marketUp ?? "-"}${marketUp === null || marketUp === undefined ? "" : "¢"}`;
       const marketDownStr = `${marketDown ?? "-"}${marketDown === null || marketDown === undefined ? "" : "¢"}`;
       const polyHeaderValue = `${ANSI.green}↑ UP${ANSI.reset} ${marketUpStr}  |  ${ANSI.red}↓ DOWN${ANSI.reset} ${marketDownStr}`;
-
-      const heikenValue = `${consec.color ?? "-"} x${consec.count}`;
-      const heikenLine = formatNarrativeValue("Heiken Ashi", heikenValue, haNarrative);
-
-      const rsiArrow = rsiSlope !== null && rsiSlope < 0 ? "↓" : rsiSlope !== null && rsiSlope > 0 ? "↑" : "-";
-      const rsiValue = `${formatNumber(rsiNow, 1)} ${rsiArrow}`;
-      const rsiLine = formatNarrativeValue("RSI", rsiValue, rsiNarrative);
-
-      const macdLine = formatNarrativeValue("MACD", macdLabel, macdNarrative);
-
-      const delta1Narrative = narrativeFromSign(delta1m);
-      const delta3Narrative = narrativeFromSign(delta3m);
-      const deltaValue = `${colorByNarrative(formatSignedDelta(delta1m, lastClose), delta1Narrative)} | ${colorByNarrative(formatSignedDelta(delta3m, lastClose), delta3Narrative)}`;
-      const deltaLine = `Delta 1/3Min: ${deltaValue}`;
-
-      const vwapValue = `${formatNumber(vwapNow, 0)} (${formatPct(vwapDist, 2)}) | slope: ${vwapSlopeLabel}`;
-      const vwapLine = formatNarrativeValue("VWAP", vwapValue, vwapNarrative);
-
-      const signal = rec.action === "ENTER" ? (rec.side === "UP" ? "BUY UP" : "BUY DOWN") : "NO TRADE";
-
-      const actionLine = rec.action === "ENTER"
-        ? `${rec.action} NOW (${rec.phase} ENTRY)`
-        : `NO TRADE (${rec.phase})`;
-
-      const spreadUp = poly.ok ? poly.orderbook.up.spread : null;
-      const spreadDown = poly.ok ? poly.orderbook.down.spread : null;
-
-      const spread = spreadUp !== null && spreadDown !== null ? Math.max(spreadUp, spreadDown) : (spreadUp ?? spreadDown);
-      const liquidity = poly.ok
-        ? (Number(poly.market?.liquidityNum) || Number(poly.market?.liquidity) || null)
-        : null;
 
       const spotPrice = wsPrice ?? lastPrice;
       const currentPrice = chainlink?.price ?? null;
@@ -584,6 +712,7 @@ async function main() {
 
       if (marketSlug && priceToBeatState.slug !== marketSlug) {
         priceToBeatState = { slug: marketSlug, value: null, setAtMs: null };
+        resetMarketState(marketSlug);
       }
 
       if (priceToBeatState.slug && priceToBeatState.value === null && currentPrice !== null) {
@@ -608,11 +737,7 @@ async function main() {
         : null;
       const ptbDeltaColor = ptbDelta === null
         ? ANSI.gray
-        : ptbDelta > 0
-          ? ANSI.green
-          : ptbDelta < 0
-            ? ANSI.red
-            : ANSI.gray;
+        : ptbDelta > 0 ? ANSI.green : ptbDelta < 0 ? ANSI.red : ANSI.gray;
       const ptbDeltaText = ptbDelta === null
         ? `${ANSI.gray}-${ANSI.reset}`
         : `${ptbDeltaColor}${ptbDelta > 0 ? "+" : ptbDelta < 0 ? "-" : ""}$${Math.abs(ptbDelta).toFixed(2)}${ANSI.reset}`;
@@ -645,66 +770,160 @@ async function main() {
       const binanceSpotValue = binanceSpotLine.split(": ")[1] ?? binanceSpotLine;
       const binanceSpotKvLine = kv("BTC (Binance):", binanceSpotValue);
 
-      const titleLine = poly.ok ? `${poly.market?.question ?? "-"}` : "-";
-      const marketLine = kv("Market:", poly.ok ? (poly.market?.slug ?? "-") : "-");
+      const titleLine = poly.ok ? `${ANSI.bold}${ANSI.white}${poly.market?.question ?? "-"}${ANSI.reset}` : `${ANSI.gray}No active market found${ANSI.reset}`;
 
-      const timeColor = timeLeftMin >= 10 && timeLeftMin <= 15
+      const liquidity = poly.ok
+        ? (Number(poly.market?.liquidityNum) || Number(poly.market?.liquidity) || null)
+        : null;
+
+      const timeColor = timeLeftMin >= 3
         ? ANSI.green
-        : timeLeftMin >= 5 && timeLeftMin < 10
+        : timeLeftMin >= 1.5
           ? ANSI.yellow
-          : timeLeftMin >= 0 && timeLeftMin < 5
+          : timeLeftMin >= 0
             ? ANSI.red
             : ANSI.reset;
-      const timeLeftLine = `⏱ Time left: ${timeColor}${fmtTimeLeft(timeLeftMin)}${ANSI.reset}`;
 
       const polyTimeLeftColor = settlementLeftMin !== null
-        ? (settlementLeftMin >= 10 && settlementLeftMin <= 15
-          ? ANSI.green
-          : settlementLeftMin >= 5 && settlementLeftMin < 10
-            ? ANSI.yellow
-            : settlementLeftMin >= 0 && settlementLeftMin < 5
-              ? ANSI.red
-              : ANSI.reset)
+        ? (settlementLeftMin >= 3 ? ANSI.green : settlementLeftMin >= 1.5 ? ANSI.yellow : settlementLeftMin >= 0 ? ANSI.red : ANSI.reset)
         : ANSI.reset;
 
+      // Signal display
+      const signalColor = rec.action === "ENTER" ? (rec.side === "UP" ? ANSI.green : ANSI.red) : ANSI.gray;
+      const signalText = rec.action === "ENTER"
+        ? `${signalColor}${ANSI.bold}⚡ ${rec.side === "UP" ? "BUY UP" : "BUY DOWN"} (${rec.phase}) ${ANSI.reset}${strengthBadge(rec.strength)}`
+        : `${ANSI.gray}NO TRADE${ANSI.reset} ${ANSI.dim}(${rec.reason})${ANSI.reset}`;
+
+      // EMA crossover display
+      const emaLabel = emaCross?.signal === "GOLDEN_CROSS" ? `${ANSI.green}Golden Cross ↗${ANSI.reset}`
+        : emaCross?.signal === "DEATH_CROSS" ? `${ANSI.red}Death Cross ↘${ANSI.reset}`
+          : `${ANSI.gray}No cross${ANSI.reset}`;
+
+      // BB display
+      const bbLabel = bbData
+        ? `%B ${(bbData.percentB * 100).toFixed(0)}% | BW ${(bbData.bandwidth * 100).toFixed(2)}%${bbSqueeze?.isSqueeze ? ` ${ANSI.magenta}⚡SQUEEZE${ANSI.reset}` : ""}`
+        : "-";
+      const bbNarrative = bbData ? (bbData.percentB > 0.6 ? "LONG" : bbData.percentB < 0.4 ? "SHORT" : "NEUTRAL") : "NEUTRAL";
+
+      // Momentum display
+      const velocityLabel = velocity !== null ? `${velocity > 0 ? "+" : ""}${velocity.toFixed(3)}%` : "-";
+      const velocityNarrative = narrativeFromSign(velocity);
+
+      // Volume display
+      const volLabel = volumeSpike ? `${volumeSpike.ratio.toFixed(1)}x ${volumeSpike.isSpike ? `${ANSI.yellow}⚡SPIKE${ANSI.reset}` : ""}` : "-";
+
+      // Supertrend & StochRSI
+      const supertrendLabel = supertrend ? `${supertrend.trend} @ \$${supertrend.value.toFixed(0)} (${supertrend.distancePct > 0 ? "+" : ""}${supertrend.distancePct.toFixed(2)}%)` : "-";
+      const supertrendNarrative = supertrend ? supertrend.trend : "NEUTRAL";
+      
+      const stochRsiLabel = stochRsi ? `K:${stochRsi.k.toFixed(1)} D:${stochRsi.d.toFixed(1)} (${stochRsi.signal})` : "-";
+      const stochRsiNarrative = stochRsi ? (stochRsi.signal === "BULLISH" || stochRsi.signal === "OVERSOLD" ? "LONG" : stochRsi.signal === "BEARISH" || stochRsi.signal === "OVERBOUGHT" ? "SHORT" : "NEUTRAL") : "NEUTRAL";
+
+      // Delta display
+      const delta1Narrative = narrativeFromSign(delta1m);
+      const delta3Narrative = narrativeFromSign(delta3m);
+      const deltaValue = `${colorByNarrative(formatSignedDelta(delta1m, lastClose), delta1Narrative)} | ${colorByNarrative(formatSignedDelta(delta3m, lastClose), delta3Narrative)}`;
+
+      // Confidence bar
+      const confBarStr = confidenceBar(scored.confidence, 15);
+
+      const w = screenWidth();
+
       const lines = [
-        titleLine,
-        marketLine,
-        kv("Time left:", `${timeColor}${fmtTimeLeft(timeLeftMin)}${ANSI.reset}`),
         "",
-        sepLine(),
+        `  ${ANSI.bold}${ANSI.cyan}╔${"═".repeat(w - 4)}╗${ANSI.reset}`,
+        `  ${ANSI.bold}${ANSI.cyan}║${ANSI.reset}${centerText(`${ANSI.bold}${ANSI.white} POLYMARKET BTC 5m ASSISTANT ${ANSI.reset}`, w - 4)}${ANSI.bold}${ANSI.cyan}║${ANSI.reset}`,
+        `  ${ANSI.bold}${ANSI.cyan}╚${"═".repeat(w - 4)}╝${ANSI.reset}`,
         "",
+        `  ${titleLine}`,
+        kv("Market:", poly.ok ? (poly.market?.slug ?? "-") : "-"),
+        kv("Time left:", `${timeColor}${ANSI.bold}${fmtTimeLeft(timeLeftMin)}${ANSI.reset}  ${ANSI.gray}| Phase: ${timeAware.phase}${ANSI.reset}`),
+        "",
+        `  ${sepLine()}`,
+        "",
+        section("SIGNAL & PREDICTION"),
+        "",
+        kv("Signal:", signalText),
         kv("TA Predict:", predictValue),
-        kv("Heiken Ashi:", heikenLine.split(": ")[1] ?? heikenLine),
-        kv("RSI:", rsiLine.split(": ")[1] ?? rsiLine),
-        kv("MACD:", macdLine.split(": ")[1] ?? macdLine),
-        kv("Delta 1/3:", deltaLine.split(": ")[1] ?? deltaLine),
-        kv("VWAP:", vwapLine.split(": ")[1] ?? vwapLine),
+        kv("Confidence:", `${confBarStr} ${ANSI.bold}${(scored.confidence * 100).toFixed(0)}%${ANSI.reset}  ${ANSI.gray}(${scored.indicatorCount} indicators)${ANSI.reset}`),
+        kv("Regime:", `${regimeBadge(regimeInfo.regime)} ${ANSI.gray}| Vol: ${regimeInfo.volatility}${ANSI.reset}`),
         "",
-        sepLine(),
+        `  ${sepLine()}`,
         "",
-        kv("POLYMARKET:", polyHeaderValue),
-        liquidity !== null ? kv("Liquidity:", formatNumber(liquidity, 0)) : null,
-        settlementLeftMin !== null ? kv("Time left:", `${polyTimeLeftColor}${fmtTimeLeft(settlementLeftMin)}${ANSI.reset}`) : null,
-        priceToBeat !== null ? kv("PRICE TO BEAT: ", `$${formatNumber(priceToBeat, 0)}`) : kv("PRICE TO BEAT: ", `${ANSI.gray}-${ANSI.reset}`),
+        section("TECHNICAL ANALYSIS"),
+        "",
+        kv("Heiken Ashi:", colorByNarrative(`${consec.color ?? "-"} x${consec.count}`, haNarrative)),
+        kv("RSI:", colorByNarrative(`${formatNumber(rsiNow, 1)} ${rsiSlope !== null && rsiSlope > 0 ? "↗" : rsiSlope !== null && rsiSlope < 0 ? "↘" : "→"}`, rsiNarrative)),
+        kv("MACD:", colorByNarrative(macdLabel, macdNarrative)),
+        kv("EMA Cross:", emaLabel),
+        kv("Bollinger:", colorByNarrative(bbLabel, bbNarrative)),
+        kv("VWAP:", colorByNarrative(`${formatNumber(vwapNow, 0)} (${formatPct(vwapDist, 2)}) | slope: ${vwapSlopeLabel}`, vwapNarrative)),
+        kv("Supertrend:", colorByNarrative(supertrendLabel, supertrendNarrative)),
+        kv("Delta 1m/3m:", deltaValue),
+        kv("Velocity:", colorByNarrative(velocityLabel, velocityNarrative)),
+        kv("Volume:", volLabel),
+        kv("StochRSI:", colorByNarrative(stochRsiLabel, stochRsiNarrative)),
+        atr ? kv("ATR:", `$${atr.atr.toFixed(2)} (${atr.atrPct.toFixed(3)}%)`) : null,
+        "",
+        `  ${sepLine()}`,
+        "",
+        section("POLYMARKET"),
+        "",
+        kv("Prices:", polyHeaderValue),
+        liquidity !== null ? kv("Liquidity:", `$${formatNumber(liquidity, 0)}`) : null,
+        settlementLeftMin !== null ? kv("Settle in:", `${polyTimeLeftColor}${fmtTimeLeft(settlementLeftMin)}${ANSI.reset}`) : null,
+        priceToBeat !== null ? kv("PRICE TO BEAT:", `${ANSI.bold}$${formatNumber(priceToBeat, 2)}${ANSI.reset}`) : kv("PRICE TO BEAT:", `${ANSI.gray}-${ANSI.reset}`),
         currentPriceLine,
+        edge.edgeUp !== null ? kv("Edge:", `UP ${ANSI.green}${(edge.edgeUp * 100).toFixed(1)}%${ANSI.reset} | DOWN ${ANSI.red}${(edge.edgeDown * 100).toFixed(1)}%${ANSI.reset}`) : null,
         "",
-        sepLine(),
+        `  ${sepLine()}`,
+        "",
+        section("PRICES"),
         "",
         binanceSpotKvLine,
         "",
-        sepLine(),
+        `  ${sepLine()}`,
         "",
-        kv("ET | Session:", `${ANSI.white}${fmtEtTime(new Date())}${ANSI.reset} | ${ANSI.white}${getBtcSession(new Date())}${ANSI.reset}`),
-        "",
-        sepLine(),
-        centerText(`${ANSI.dim}${ANSI.gray}created by @krajekis${ANSI.reset}`, screenWidth())
-      ].filter((x) => x !== null);
+      ];
 
-      renderScreen(lines.join("\n") + "\n");
+      // ──── AUTO-TRADE SECTION ────
+      if (CONFIG.autoTrade.enabled) {
+        const ats = autoTradeStatus;
+        const modeLabel = ats.dryRun ? `${ANSI.yellow}DRY-RUN${ANSI.reset}` : `${ANSI.red}${ANSI.bold}LIVE${ANSI.reset}`;
+        lines.push(section("AUTO-TRADE"));
+        lines.push("");
+        lines.push(kv("Mode:", modeLabel));
+        lines.push(kv("Amount:", `$${ats.amount}`));
+        lines.push(kv("Min Conf:", `${(ats.minConfidence * 100).toFixed(0)}% | Min Edge: ${(ats.minEdge * 100).toFixed(0)}%`));
+        lines.push(kv("Trades:", `${ats.totalTrades} total | ${ANSI.green}W:${ats.wins}${ANSI.reset} / ${ANSI.red}L:${ats.losses}${ANSI.reset}`));
+        if (ats.cooldownRemaining > 0) {
+          lines.push(kv("Cooldown:", `${ANSI.yellow}${ats.cooldownRemaining}s${ANSI.reset}`));
+        }
+        if (!tradeCheck.trade) {
+          lines.push(kv("Status:", `${ANSI.gray}${tradeCheck.reason}${ANSI.reset}`));
+        } else {
+          lines.push(kv("Status:", `${ANSI.green}${ANSI.bold}TRADE EXECUTED! ${tradeCheck.side} $${tradeCheck.amount}${ANSI.reset}`));
+        }
+        if (lastAutoTradeResult) {
+          lines.push(kv("Last Trade:", `${lastAutoTradeResult.record.side} $${lastAutoTradeResult.record.amount} @ ${lastAutoTradeResult.record.timestamp.substring(11, 19)} [${lastAutoTradeResult.mode}]`));
+        }
+        lines.push("");
+        lines.push(`  ${sepLine()}`);
+        lines.push("");
+      }
+
+      lines.push(kv("ET | Session:", `${ANSI.white}${fmtEtTime(new Date())}${ANSI.reset} | ${ANSI.white}${getBtcSession(new Date())}${ANSI.reset}`));
+      lines.push("");
+      lines.push(`  ${sepLine()}`);
+      lines.push(centerText(`${ANSI.dim}${ANSI.gray}Polymarket BTC 5m Assistant${ANSI.reset}`, w));
+      lines.push("");
+
+      renderScreen(lines.filter((x) => x !== null).join("\n") + "\n");
 
       prevSpotPrice = spotPrice ?? prevSpotPrice;
       prevCurrentPrice = currentPrice ?? prevCurrentPrice;
+
+      const signal = rec.action === "ENTER" ? (rec.side === "UP" ? "BUY UP" : "BUY DOWN") : "NO TRADE";
 
       appendCsvRow("./logs/signals.csv", header, [
         new Date().toISOString(),
@@ -718,7 +937,13 @@ async function main() {
         marketDown,
         edge.edgeUp,
         edge.edgeDown,
-        rec.action === "ENTER" ? `${rec.side}:${rec.phase}:${rec.strength}` : "NO_TRADE"
+        rec.action === "ENTER" ? `${rec.side}:${rec.phase}:${rec.strength}` : "NO_TRADE",
+        scored.confidence?.toFixed(4) ?? "-",
+        bbData?.percentB?.toFixed(4) ?? "-",
+        emaCross?.signal ?? "-",
+        roc?.toFixed(4) ?? "-",
+        velocity?.toFixed(4) ?? "-",
+        atr?.atrPct?.toFixed(4) ?? "-"
       ]);
     } catch (err) {
       console.log("────────────────────────────");

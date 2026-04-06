@@ -38,20 +38,141 @@ export async function fetchMarketsBySeriesSlug({ seriesSlug, limit = 50 }) {
   return Array.isArray(data) ? data : [];
 }
 
-export async function fetchLiveEventsBySeriesId({ seriesId, limit = 20 }) {
-  const url = new URL("/events", CONFIG.gammaBaseUrl);
-  url.searchParams.set("series_id", String(seriesId));
-  url.searchParams.set("active", "true");
-  url.searchParams.set("closed", "false");
-  url.searchParams.set("limit", String(limit));
+/**
+ * Try to resolve the series ID from the series slug via /series endpoint.
+ */
+let cachedSeriesId = null;
+let seriesIdFetchedAtMs = 0;
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Gamma events(series_id) error: ${res.status} ${await res.text()}`);
+async function resolveSeriesId(slug) {
+  const now = Date.now();
+  if (cachedSeriesId && now - seriesIdFetchedAtMs < 120_000) return cachedSeriesId;
+
+  try {
+    const url = new URL("/series", CONFIG.gammaBaseUrl);
+    url.searchParams.set("slug", slug);
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      const series = Array.isArray(data) ? data[0] : data;
+      if (series?.id) {
+        cachedSeriesId = String(series.id);
+        seriesIdFetchedAtMs = now;
+        return cachedSeriesId;
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/**
+ * Fetch live events — multi-method approach with fallbacks:
+ * 1. Try /series?slug=... to resolve series_id
+ * 2. Try /events?series_id=... if we have a series_id
+ * 3. Try /markets?seriesSlug=... as fallback
+ * 4. Try /events (active) and filter by slug/title keywords
+ */
+export async function fetchLiveEventsBySeriesId({ seriesId, limit = 20 }) {
+  const seriesSlug = CONFIG.polymarket.seriesSlug;
+  const windowTerm = CONFIG.candleWindowMinutes === 5 ? "5" : "15";
+
+  // ──── METHOD 1: Try to resolve series_id from slug ────
+  let resolvedId = seriesId || null;
+  if (!resolvedId && seriesSlug) {
+    resolvedId = await resolveSeriesId(seriesSlug);
   }
 
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  // ──── METHOD 2: Fetch events by series_id ────
+  if (resolvedId) {
+    try {
+      const url = new URL("/events", CONFIG.gammaBaseUrl);
+      url.searchParams.set("series_id", String(resolvedId));
+      url.searchParams.set("active", "true");
+      url.searchParams.set("closed", "false");
+      url.searchParams.set("limit", String(limit));
+
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        const events = Array.isArray(data) ? data : [];
+        if (events.length > 0) return events;
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // ──── METHOD 3: Fetch markets by series slug ────
+  if (seriesSlug) {
+    try {
+      const markets = await fetchMarketsBySeriesSlug({ seriesSlug, limit });
+      if (markets.length > 0) {
+        // Wrap markets in a synthetic event structure
+        return [{ markets }];
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // ──── METHOD 4: Fetch all active events and filter ────
+  try {
+    const url = new URL("/events", CONFIG.gammaBaseUrl);
+    url.searchParams.set("active", "true");
+    url.searchParams.set("closed", "false");
+    url.searchParams.set("limit", String(Math.min(limit * 5, 100)));
+
+    const res = await fetch(url);
+    if (!res.ok) return [];
+
+    const data = await res.json();
+    const events = Array.isArray(data) ? data : [];
+
+    return events.filter(e => {
+      const eventSlug = String(e.slug || "").toLowerCase();
+      const eventTitle = String(e.title || "").toLowerCase();
+      const seriesSlugLower = String(seriesSlug || "").toLowerCase();
+
+      // Match by series slug
+      if (seriesSlugLower && eventSlug.includes(seriesSlugLower)) return true;
+
+      // Match by window time (5m or 15m)
+      const matchTerms = [`${windowTerm}m`, `${windowTerm}-min`, `${windowTerm} min`, `${windowTerm}-minute`];
+      const btcTerms = ["bitcoin", "btc"];
+      const upDownTerms = ["up or down", "up-or-down", "updown"];
+
+      const hasBtc = btcTerms.some(t => eventTitle.includes(t) || eventSlug.includes(t));
+      const hasUpDown = upDownTerms.some(t => eventTitle.includes(t) || eventSlug.includes(t));
+      const hasTime = matchTerms.some(t => eventTitle.includes(t) || eventSlug.includes(t));
+
+      if (hasBtc && hasUpDown && hasTime) return true;
+
+      // Check series references within event
+      const series = Array.isArray(e.series) ? e.series : [];
+      for (const s of series) {
+        const sSlug = String(s.slug || "").toLowerCase();
+        if (sSlug === seriesSlugLower) return true;
+        if (matchTerms.some(t => sSlug.includes(t)) && btcTerms.some(t => sSlug.includes(t))) return true;
+      }
+
+      // Check markets within the event
+      const markets = Array.isArray(e.markets) ? e.markets : [];
+      for (const m of markets) {
+        const mSlug = String(m.slug || "").toLowerCase();
+        const mTitle = String(m.question || m.title || "").toLowerCase();
+        const hasMBtc = btcTerms.some(t => mTitle.includes(t) || mSlug.includes(t));
+        const hasMUpDown = upDownTerms.some(t => mTitle.includes(t) || mSlug.includes(t));
+        const hasMTime = matchTerms.some(t => mTitle.includes(t) || mSlug.includes(t));
+        if (hasMBtc && hasMUpDown && hasMTime) return true;
+      }
+
+      return false;
+    });
+  } catch {
+    return [];
+  }
 }
 
 export function flattenEventMarkets(events) {
@@ -129,7 +250,7 @@ function marketHasSeriesSlug(market, seriesSlug) {
   return false;
 }
 
-export function filterBtcUpDown15mMarkets(markets, { seriesSlug, slugPrefix } = {}) {
+export function filterBtcUpDown5mMarkets(markets, { seriesSlug, slugPrefix } = {}) {
   const prefix = (slugPrefix ?? "").toLowerCase();
   const wantedSeries = (seriesSlug ?? "").toLowerCase();
 
