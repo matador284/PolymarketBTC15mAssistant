@@ -25,7 +25,9 @@ import { detectRegime } from "./engines/regime.js";
 import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
 import { computeEdge, decide } from "./engines/edge.js";
 import { shouldAutoTrade, executeTrade, getAutoTradeStatus, resetMarketState } from "./engines/autoTrade.js";
-import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils.js";
+import { getSelfLearningBias } from "./engines/optimizer.js";
+import { analyzeMacroTrend } from "./engines/macro.js";
+import { appendCsvRow, formatNumber, formatPct, formatSignedPct, getCandleWindowTiming, sleep } from "./utils.js";
 import { startBinanceTradeStream } from "./data/binanceWs.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -465,6 +467,7 @@ async function main() {
     "timestamp", "entry_minute", "time_left_min", "regime", "signal",
     "model_up", "model_down", "mkt_up", "mkt_down",
     "edge_up", "edge_down", "recommendation", "confidence",
+    "macro_bias", "macro_value", "learning_streak", "learning_bias",
     "bb_percentB", "ema_signal", "roc", "velocity", "atr_pct"
   ];
 
@@ -500,12 +503,15 @@ async function main() {
           ? Promise.resolve({ price: chainlinkWsPrice, updatedAt: chainlinkWsTick?.updatedAt ?? null, source: "chainlink_ws" })
           : fetchChainlinkBtcUsd();
 
-      const [klines1m, klines5m, lastPrice, chainlink, poly] = await Promise.all([
+      const [klines1m, klines5m, klines1d, klines1w, lastPrice, chainlink, poly, learning] = await Promise.all([
         fetchKlines({ interval: "1m", limit: 240 }),
         fetchKlines({ interval: "5m", limit: 200 }),
+        fetchKlines({ interval: "1d", limit: 100 }), // Macro 1D
+        fetchKlines({ interval: "1w", limit: 52 }),  // Macro 1W
         fetchLastPrice(),
         chainlinkPromise,
-        fetchPolymarketSnapshot()
+        fetchPolymarketSnapshot(),
+        getSelfLearningBias()
       ]);
 
       if (!poly.ok) {
@@ -599,6 +605,9 @@ async function main() {
         bbSqueeze
       });
 
+      // ──── MACRO & LEARNING ────
+      const macro = analyzeMacroTrend(klines1d, klines1w);
+
       // ──── SCORING ────
       const scored = scoreDirection({
         price: lastPrice,
@@ -619,7 +628,9 @@ async function main() {
         bbSqueeze,
         velocity,
         stochRsi,
-        supertrend
+        supertrend,
+        macroBias: macro.biasValue,
+        learningBias: (learning.upBias || 0) - (learning.downBias || 0)
       });
 
       const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, CONFIG.candleWindowMinutes);
@@ -838,6 +849,8 @@ async function main() {
         `  ${titleLine}`,
         kv("Market:", poly.ok ? (poly.market?.slug ?? "-") : "-"),
         kv("Time left:", `${timeColor}${ANSI.bold}${fmtTimeLeft(timeLeftMin)}${ANSI.reset}  ${ANSI.gray}| Phase: ${timeAware.phase}${ANSI.reset}`),
+        kv("Macro Context:", `${macro.bias === "STRONG_BULLISH" ? ANSI.green : macro.bias === "STRONG_BEARISH" ? ANSI.red : ANSI.cyan}${macro.bias}${ANSI.reset} ${ANSI.gray}(1D: ${macro.dTrend}, 1W: ${macro.wTrend})${ANSI.reset}`),
+        kv("Self-Learning:", `${(learning.upBias || 0) > 0 ? ANSI.green : (learning.downBias || 0) > 0 ? ANSI.red : ANSI.gray}${learning.streak || "OFF"}${ANSI.reset} ${ANSI.gray}(Recent Bias: ${formatSignedPct((learning.upBias || 0) - (learning.downBias || 0))})${ANSI.reset}`),
         "",
         `  ${sepLine()}`,
         "",
@@ -939,6 +952,10 @@ async function main() {
         edge.edgeDown,
         rec.action === "ENTER" ? `${rec.side}:${rec.phase}:${rec.strength}` : "NO_TRADE",
         scored.confidence?.toFixed(4) ?? "-",
+        macro.bias,
+        macro.biasValue?.toFixed(4) || "0",
+        learning.streak || "OFF",
+        ((learning.upBias || 0) - (learning.downBias || 0)).toFixed(4),
         bbData?.percentB?.toFixed(4) ?? "-",
         emaCross?.signal ?? "-",
         roc?.toFixed(4) ?? "-",

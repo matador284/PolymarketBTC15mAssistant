@@ -22,6 +22,12 @@ export function formatPct(x, digits = 2) {
   return `${(x * 100).toFixed(digits)}%`;
 }
 
+export function formatSignedPct(x, digits = 1) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "-0.0%";
+  const val = x * 100;
+  return `${val > 0 ? "+" : ""}${val.toFixed(digits)}%`;
+}
+
 export function getCandleWindowTiming(windowMinutes) {
   const nowMs = Date.now();
   const windowMs = windowMinutes * 60_000;

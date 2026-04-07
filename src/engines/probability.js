@@ -25,7 +25,9 @@ export function scoreDirection(inputs) {
     bbSqueeze,    // Bollinger squeeze detected
     velocity,     // Price velocity
     stochRsi,     // Stochastic RSI data
-    supertrend    // Supertrend data
+    supertrend,   // Supertrend data
+    macroBias,    // Macro Trend Bias (-0.05 to +0.05)
+    learningBias  // Self-Learning Bias (-0.05 to +0.05)
   } = inputs;
 
   let up = 0;
@@ -183,7 +185,12 @@ export function scoreDirection(inputs) {
   down = Math.max(0, down);
   
   const total = up + down;
-  const rawUp = total > 0 ? up / total : 0.5;
+  const initialUp = total > 0 ? up / total : 0.5;
+
+  // Apply macro and learning biases
+  // Macro bias: -0.05 to +0.05 (Trend de dias/meses)
+  // Learning bias: -0.05 to +0.05 (Otimizacao por historico)
+  const rawUp = clamp(initialUp + (macroBias || 0) + (learningBias || 0), 0, 1);
 
   // Confidence: how far from 50/50
   const confidence = Math.abs(rawUp - 0.5) * 2;

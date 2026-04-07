@@ -20,16 +20,20 @@ async function run() {
   let unresolved = 0;
 
   console.log("Analyzing Trades P&L...\n");
-  console.log("TIME\t\tMARKET\t\t\tSIDE\tEDGE\tCONF\tRESULT");
-  console.log("-".repeat(80));
+  console.log("TIME\tMARKET\t\tSIDE\tEDGE\tCONF\tRESULT\t\tPROFIT ($)");
+  console.log("-".repeat(95));
+
+  let totalNetProfit = 0;
 
   for (const line of lines) {
     const parts = line.split(",");
     const ts = parts[0].substring(11, 16);
     const slug = parts[1];
     const side = parts[2];
+    const amount = parseFloat(parts[3]) || 10;
     const edge = parseFloat(parts[5]);
     const conf = parseFloat(parts[4]);
+    const avgPrice = parseFloat(parts[10]) || 0.5; // Estimated execution price
 
     try {
       const res = await fetch(GAMMA_URL + slug);
@@ -37,27 +41,22 @@ async function run() {
       
       const event = data[0];
       if (!event) {
-        console.log(`${ts}\t${slug.substring(13, 23)}\t${side}\t${(edge*100).toFixed(0)}%\t${(conf*100).toFixed(0)}%\tUNKNOWN`);
+        console.log(`${ts}\t${slug.substring(13, 23)}\t${side}\t${(edge*100).toFixed(0)}%\t${(conf*100).toFixed(0)}%\tUNKNOWN\t\t-`);
         continue;
       }
       
       const market = event.markets?.[0];
       let result = "PENDING";
       let actualWinner = null;
+      let profit = 0;
       
       if (market && market.closed) {
-        // Find which outcome won (usually price = 1)
         const prices = JSON.parse(market.outcomePrices || "[]");
         const outcomes = JSON.parse(market.outcomes || "[]");
-        
         let winningIndex = -1;
-        
-        // If it's closed and resolved, check condition
-        // In some gamma endpoints, closed markets have outcomePrices like ["1", "0"]
         if (prices[0] === "1" || prices[0] === 1) winningIndex = 0;
         else if (prices[1] === "1" || prices[1] === 1) winningIndex = 1;
         
-        // Another way is to check the asset price at the end, but Polymarket resolves it exactly.
         if (winningIndex !== -1) {
              actualWinner = outcomes[winningIndex].toUpperCase();
         }
@@ -67,25 +66,32 @@ async function run() {
         if (actualWinner === side) {
            result = "✅ WIN";
            wins++;
+           const sharePrice = Math.max(0.01, Math.min(0.99, conf - edge));
+           profit = (amount / sharePrice) - amount;
+           totalNetProfit += profit;
         } else {
            result = "❌ LOSS";
            losses++;
+           profit = -amount;
+           totalNetProfit += profit;
         }
       } else {
          unresolved++;
       }
       
-      console.log(`${ts}\t${slug.substring(13, 26)}\t${side}\t${(edge*100).toFixed(1)}%\t${(conf*100).toFixed(1)}%\t${result}`);
+      const profitStr = profit !== 0 ? `${profit >= 0 ? "+" : ""}$${profit.toFixed(2)}` : "-";
+      console.log(`${ts}\t${slug.substring(13, 26)}\t${side}\t${(edge*100).toFixed(1)}%\t${(conf*100).toFixed(1)}%\t${result}\t\t${profitStr}`);
       
     } catch(e) {
       console.log(`${ts}\t${slug.substring(13, 23)}\t${side}\tERR`);
     }
   }
 
-  console.log("-".repeat(80));
+  console.log("-".repeat(95));
   console.log(`TOTAL TRADES: ${wins + losses + unresolved}`);
   console.log(`WINS:   ${wins}`);
   console.log(`LOSSES: ${losses}`);
+  console.log(`SALDO LIQUIDO ESTIMADO: US$ ${totalNetProfit.toFixed(2)}`);
   if (wins + losses > 0) {
     console.log(`WIN RATE: ${((wins / (wins + losses)) * 100).toFixed(2)}%`);
   }
