@@ -2,6 +2,7 @@ import { CONFIG } from "../config.js";
 import { appendCsvRow } from "../utils.js";
 import { ClobClient } from "@polymarket/clob-client";
 import { fetchEventBySlug } from "../data/polymarket.js";
+import { getWalletBalance } from "../data/walletBalance.js";
 import { Wallet } from "ethers";
 
 let clobClient = null;
@@ -222,6 +223,12 @@ export async function executeTrade({
 
   // ──── LIVE TRADE EXECUTION ────
   try {
+    // 1. Checagem de Saldo (USDC)
+    const wallet = await getWalletBalance();
+    if (!wallet.ok || wallet.usdc < amount) {
+      throw new Error(`Insufficient funds: Need $${amount}, have $${wallet.usdc?.toFixed(2) || "0.00"}`);
+    }
+
     const client = await getClobClient();
     
     // Check balance before (optional but good)
