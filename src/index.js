@@ -30,6 +30,7 @@ import { getWhaleSentiment } from "./engines/whaleSpy.js";
 import { getSelfLearningBias } from "./engines/optimizer.js";
 import { analyzeMacroTrend } from "./engines/macro.js";
 import { appendCsvRow, formatNumber, formatPct, formatSignedPct, getCandleWindowTiming, sleep } from "./utils.js";
+import { getWalletBalance } from "./data/walletBalance.js";
 import { startBinanceTradeStream } from "./data/binanceWs.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -489,6 +490,7 @@ async function main() {
   while (true) {
     const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
     await updateSessionPnL();
+    const walletBal = await getWalletBalance();
 
     const wsTick = binanceStream.getLast();
     const wsPrice = wsTick?.price ?? null;
@@ -921,6 +923,10 @@ async function main() {
         lines.push("");
         lines.push(kv("Mode:", modeLabel));
         lines.push(kv("Amount:", `$${ats.amount}`));
+        if (walletBal.ok) {
+          const balColor = walletBal.usdc > 10 ? ANSI.green : walletBal.usdc > 3 ? ANSI.yellow : ANSI.red;
+          lines.push(kv("💰 Saldo USDC:", `${balColor}${ANSI.bold}$${walletBal.usdc.toFixed(2)}${ANSI.reset}`));
+        }
         lines.push(kv("Min Conf:", `${(ats.minConfidence * 100).toFixed(0)}% | Min Edge: ${(ats.minEdge * 100).toFixed(0)}%`));
         lines.push(kv("Trades:", `${ats.totalTrades} total | ${ANSI.green}W:${ats.wins}${ANSI.reset} / ${ANSI.red}L:${ats.losses}${ANSI.reset}`));
         if (ats.cooldownRemaining > 0) {
