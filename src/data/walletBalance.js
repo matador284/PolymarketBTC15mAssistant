@@ -1,8 +1,9 @@
 import { ethers } from "ethers";
 import { CONFIG } from "../config.js";
 
-// USDC.e contract no Polygon (6 decimais)
-const USDC_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDC_NATIVE_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
+
 const ERC20_ABI = [
   "function balanceOf(address account) view returns (uint256)",
   "function decimals() view returns (uint8)"
@@ -10,16 +11,12 @@ const ERC20_ABI = [
 
 let cachedBalance = null;
 let lastFetchMs = 0;
-const CACHE_TTL_MS = 60_000; // Atualiza a cada 60 segundos
+const CACHE_TTL_MS = 30_000; // 30 segundos
 
-/**
- * Busca o saldo USDC da carteira do trader na rede Polygon.
- * Usa cache para não sobrecarregar o RPC.
- */
 export async function getWalletBalance() {
-  const privateKey = process.env.AUTO_TRADE_PRIVATE_KEY;
+  const privateKey = CONFIG.autoTrade.privateKey;
   if (!privateKey) {
-    return { ok: false, usdc: null, address: null };
+    return { ok: false, usdc: 0, address: null };
   }
 
   const now = Date.now();
@@ -27,7 +24,6 @@ export async function getWalletBalance() {
     return cachedBalance;
   }
 
-  // Tenta múltiplos RPCs para resiliência
   const rpcUrls = [
     "https://polygon-rpc.com",
     "https://rpc.ankr.com/polygon",
@@ -40,19 +36,25 @@ export async function getWalletBalance() {
       const wallet = new ethers.Wallet(privateKey);
       const address = wallet.address;
 
-      const usdc = new ethers.Contract(USDC_CONTRACT, ERC20_ABI, provider);
-      const rawBalance = await usdc.balanceOf(address);
-      const balance = parseFloat(ethers.utils.formatUnits(rawBalance, 6));
+      // Checa os dois tipos de USDC que a Polymarket usa
+      const usdcE = new ethers.Contract(USDC_E_CONTRACT, ERC20_ABI, provider);
+      const usdcN = new ethers.Contract(USDC_NATIVE_CONTRACT, ERC20_ABI, provider);
 
-      const result = { ok: true, usdc: balance, address };
+      const [balE, balN] = await Promise.all([
+        usdcE.balanceOf(address).catch(() => BigInt(0)),
+        usdcN.balanceOf(address).catch(() => BigInt(0))
+      ]);
+
+      const totalUSDC = parseFloat(ethers.utils.formatUnits(balE.add(balN), 6));
+
+      const result = { ok: true, usdc: totalUSDC, address };
       cachedBalance = result;
       lastFetchMs = now;
       return result;
     } catch (e) {
-      // Tenta próximo RPC
       continue;
     }
   }
 
-  return { ok: false, usdc: null, address: null };
+  return { ok: false, usdc: 0, address: null };
 }

@@ -934,10 +934,11 @@ async function main() {
         lines.push("");
         lines.push(kv("Mode:", modeLabel));
         lines.push(kv("Amount:", `$${ats.amount}`));
-        if (walletBal.ok) {
-          const balColor = walletBal.usdc > 10 ? ANSI.green : walletBal.usdc > 3 ? ANSI.yellow : ANSI.red;
-          lines.push(kv("💰 Saldo USDC:", `${balColor}${ANSI.bold}$${walletBal.usdc.toFixed(2)}${ANSI.reset}`));
-        }
+        
+        const balVal = walletBal.ok ? `$${walletBal.usdc.toFixed(2)}` : `${ANSI.gray}[Erro RPC]${ANSI.reset}`;
+        const balColor = (walletBal.ok && walletBal.usdc >= ats.amount) ? ANSI.green : ANSI.red;
+        lines.push(kv("💰 WALLET USDC:", `${balColor}${ANSI.bold}${balVal}${ANSI.reset}`));
+
         lines.push(kv("Min Conf:", `${(ats.minConfidence * 100).toFixed(0)}% | Min Edge: ${(ats.minEdge * 100).toFixed(0)}%`));
         lines.push(kv("Trades:", `${ats.totalTrades} total | ${ANSI.green}W:${ats.wins}${ANSI.reset} / ${ANSI.red}L:${ats.losses}${ANSI.reset}`));
         if (ats.cooldownRemaining > 0) {
