@@ -38,31 +38,36 @@ export async function getWalletBalance() {
       
       // Tenta descobrir o Proxy Wallet via Data API
       let proxyAddress = eoaAddress;
+      
+      // FALLBACK MANUAL: Endereço que encontramos no seu browser onde está o dinheiro
+      const KNOWN_PROXY = "0x01540e13dDd6793b2698dB5B7222f2c0ABf9fF18";
+      
       try {
         const res = await fetch(`https://data-api.polymarket.com/positions?user=${eoaAddress}&limit=1`);
         if (res.ok) {
           const pos = await res.json();
           if (pos && pos.length > 0 && pos[0].proxyWallet) {
             proxyAddress = pos[0].proxyWallet;
+          } else {
+            proxyAddress = KNOWN_PROXY; // Usa o endereço confirmado se a API estiver vazia
           }
+        } else {
+          proxyAddress = KNOWN_PROXY;
         }
       } catch (e) {
-        // Ignora erro de fetch e usa o EOA como fallback
+        proxyAddress = KNOWN_PROXY;
       }
-
-      // Se soubermos o endereço exato que o Marcos usa (conforme vimos no browser):
-      // const MANUAL_PROXY = "0x01540e13dDd6793b2698dB5B7222f2c0ABf9fF18";
-      // proxyAddress = MANUAL_PROXY;
 
       const usdcE = new ethers.Contract(USDC_E_CONTRACT, ERC20_ABI, provider);
       const usdcN = new ethers.Contract(USDC_NATIVE_CONTRACT, ERC20_ABI, provider);
 
       // Checa saldo no EOA e no Proxy
+      const zero = ethers.BigNumber.from(0);
       const [balEeoa, balNeoa, balEproxy, balNproxy] = await Promise.all([
-        usdcE.balanceOf(eoaAddress).catch(() => ethers.BigNumber.from(0)),
-        usdcN.balanceOf(eoaAddress).catch(() => ethers.BigNumber.from(0)),
-        proxyAddress !== eoaAddress ? usdcE.balanceOf(proxyAddress).catch(() => ethers.BigNumber.from(0)) : ethers.BigNumber.from(0),
-        proxyAddress !== eoaAddress ? usdcN.balanceOf(proxyAddress).catch(() => ethers.BigNumber.from(0)) : ethers.BigNumber.from(0),
+        usdcE.balanceOf(eoaAddress).catch(() => zero),
+        usdcN.balanceOf(eoaAddress).catch(() => zero),
+        (proxyAddress && proxyAddress !== eoaAddress) ? usdcE.balanceOf(proxyAddress).catch(() => zero) : Promise.resolve(zero),
+        (proxyAddress && proxyAddress !== eoaAddress) ? usdcN.balanceOf(proxyAddress).catch(() => zero) : Promise.resolve(zero),
       ]);
 
       const totalUSDC = parseFloat(ethers.utils.formatUnits(
