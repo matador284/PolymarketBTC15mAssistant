@@ -25,6 +25,7 @@ import { detectRegime } from "./engines/regime.js";
 import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
 import { computeEdge, decide } from "./engines/edge.js";
 import { shouldAutoTrade, executeTrade, getAutoTradeStatus, resetMarketState, updateSessionPnL } from "./engines/autoTrade.js";
+import { autoRedeemPositions } from "./engines/autoRedeem.js";
 import { getAIBriefing } from "./engines/aiBriefing.js";
 import { getWhaleSentiment } from "./engines/whaleSpy.js";
 import { getSelfLearningBias } from "./engines/optimizer.js";
@@ -456,6 +457,9 @@ function regimeBadge(regime) {
   return badges[regime] || `${ANSI.gray}${regime}${ANSI.reset}`;
 }
 
+let lastRedeemMs = 0;
+const REDEEM_INTERVAL_MS = 300_000; // 5 minutos
+
 async function main() {
   const binanceStream = startBinanceTradeStream({ symbol: CONFIG.symbol });
   const polymarketLiveStream = startPolymarketChainlinkPriceStream({});
@@ -490,6 +494,13 @@ async function main() {
   while (true) {
     const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
     await updateSessionPnL();
+    
+    // Auto-Redeem de lucros (coleta o dinheiro dos WINs passados)
+    if (Date.now() - lastRedeemMs > REDEEM_INTERVAL_MS) {
+      autoRedeemPositions().catch(() => {});
+      lastRedeemMs = Date.now();
+    }
+    
     const walletBal = await getWalletBalance();
 
     const wsTick = binanceStream.getLast();
