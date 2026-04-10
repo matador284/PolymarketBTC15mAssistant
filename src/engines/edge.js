@@ -66,6 +66,10 @@ export function decide({
   if (regime === "CHOP" && bestEdge < 0.25) {
     return { action: "NO_TRADE", side: null, phase, reason: "chop_market_danger", strength: null, edge: bestEdge };
   }
+  // SQUEEZE é diferente de CHOP — pode explodir. Permite entrada se edge >= 0.12
+  if (regime === "SQUEEZE" && bestEdge < 0.12) {
+    return { action: "NO_TRADE", side: null, phase, reason: "squeeze_low_edge", strength: null, edge: bestEdge };
+  }
 
   // ──── FILTERS ────
   if (remainingMinutes < 0.3) {
