@@ -2,7 +2,7 @@ import { CONFIG } from "../config.js";
 import { appendCsvRow } from "../utils.js";
 import { ClobClient } from "@polymarket/clob-client";
 import { fetchEventBySlug } from "../data/polymarket.js";
-import { Wallet } from "ethers";
+import { Wallet, JsonRpcProvider } from "ethers";
 
 let clobClient = null;
 
@@ -13,7 +13,10 @@ async function getClobClient() {
     throw new Error("Missing CLOB API credentials in .env");
   }
 
-  const wallet = new Wallet(cfg.privateKey);
+  // ethers v6: a wallet precisa de um provider para ter address
+  const provider = new JsonRpcProvider("https://polygon-rpc.com");
+  const wallet = new Wallet(cfg.privateKey, provider);
+  
   clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, {
     key: cfg.apiKey,
     secret: cfg.apiSecret,
@@ -282,6 +285,10 @@ export async function executeTrade({
       tradeRecord.mode,
       tradeRecord.status
     ]);
+    // CRÍTICO: Mesmo em erro, aplica cooldown para evitar spam de entradas
+    tradeState.lastTradeMs = Date.now();
+    // Reset client para forçar reconexão na próxima tentativa
+    clobClient = null;
     return { ok: false, mode: "LIVE", error: error.message };
   }
 }
@@ -317,7 +324,12 @@ export function getAutoTradeStatus() {
  * Update session P&L by checking results of pending trades.
  */
 export async function updateSessionPnL() {
-  const unresolved = tradeState.tradeHistory.filter((t) => !t.resolved && t.marketSlug !== "-");
+  const unresolved = tradeState.tradeHistory.filter((t) => 
+    !t.resolved && 
+    t.marketSlug !== "-" && 
+    t.side &&  // precisa ter side definido
+    t.status && !t.status.startsWith("ERR") // ignora trades com erro
+  );
   if (unresolved.length === 0) return;
 
   for (const t of unresolved) {
@@ -335,7 +347,7 @@ export async function updateSessionPnL() {
 
         if (winningIndex !== -1) {
           const actualWinner = outcomes[winningIndex].toUpperCase();
-          const isWin = actualWinner === t.side;
+          const isWin = actualWinner === (t.side || "");
 
           t.resolved = true;
           t.winner = actualWinner;
