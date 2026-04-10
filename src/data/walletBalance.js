@@ -41,8 +41,8 @@ export async function getWalletBalance() {
       const usdcN = new ethers.Contract(USDC_NATIVE_CONTRACT, ERC20_ABI, provider);
 
       const [balE, balN] = await Promise.all([
-        usdcE.balanceOf(address).catch(() => BigInt(0)),
-        usdcN.balanceOf(address).catch(() => BigInt(0))
+        usdcE.balanceOf(address).catch(() => ethers.BigNumber.from(0)),
+        usdcN.balanceOf(address).catch(() => ethers.BigNumber.from(0))
       ]);
 
       const totalUSDC = parseFloat(ethers.utils.formatUnits(balE.add(balN), 6));
