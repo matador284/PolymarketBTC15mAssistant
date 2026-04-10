@@ -29,25 +29,23 @@ export async function getWalletBalance() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
 
-    const response = await fetch("https://polygon.llamarpc.com", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_call",
-        params: [{ to: USDC_NATIVE_CONTRACT, data: data }, "latest"]
-      })
-    });
+    // Busca saldo dos dois tipos de USDC via fetch
+    const [resE, resN] = await Promise.all([
+      fetch("https://polygon.llamarpc.com", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: USDC_E_CONTRACT, data: data }, "latest"] })
+      }).then(r => r.json()),
+      fetch("https://polygon.llamarpc.com", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: USDC_NATIVE_CONTRACT, data: data }, "latest"] })
+      }).then(r => r.json())
+    ]);
+
+    const balE = resE.result ? ethers.BigNumber.from(resE.result) : ethers.BigNumber.from(0);
+    const balN = resN.result ? ethers.BigNumber.from(resN.result) : ethers.BigNumber.from(0);
     
-    clearTimeout(timeout);
-
-    const json = await response.json();
-    if (json.error) throw new Error(json.error.message);
-
-    const balance = ethers.BigNumber.from(json.result);
-    const formatted = parseFloat(ethers.utils.formatUnits(balance, 6));
+    const total = balE.add(balN);
+    const formatted = parseFloat(ethers.utils.formatUnits(total, 6));
 
     return { ok: true, usdc: formatted, address };
   } catch (e) {
