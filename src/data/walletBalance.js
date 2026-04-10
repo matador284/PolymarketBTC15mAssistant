@@ -26,7 +26,7 @@ export async function getWalletBalance() {
     const data = iface.encodeFunctionData("balanceOf", [address]);
 
     // Chama o RPC via fetch (mais robusto que provider.balanceOf)
-    const response = await fetch("https://rpc.ankr.com/polygon", {
+    const response = await fetch("https://polygon.llamarpc.com", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
