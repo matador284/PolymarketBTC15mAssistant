@@ -25,23 +25,23 @@ export async function getWalletBalance() {
     const iface = new ethers.utils.Interface(ERC20_ABI);
     const data = iface.encodeFunctionData("balanceOf", [address]);
 
-    // Chama o RPC via fetch (mais robusto que provider.balanceOf)
+    // Timeout de 5 segundos para não travar o robô
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
     const response = await fetch("https://polygon.llamarpc.com", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
         method: "eth_call",
-        params: [
-          {
-            to: USDC_NATIVE_CONTRACT,
-            data: data
-          },
-          "latest"
-        ]
+        params: [{ to: USDC_NATIVE_CONTRACT, data: data }, "latest"]
       })
     });
+    
+    clearTimeout(timeout);
 
     const json = await response.json();
     if (json.error) throw new Error(json.error.message);
