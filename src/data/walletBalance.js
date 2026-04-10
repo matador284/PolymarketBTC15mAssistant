@@ -17,22 +17,39 @@ export async function getWalletBalance() {
   const privateKey = CONFIG.autoTrade.privateKey;
   if (!privateKey) return { ok: false, usdc: 0, address: null };
 
-  const rpcUrl = "https://polygon-rpc.com";
   try {
-    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
     const wallet = new ethers.Wallet(privateKey);
     const address = wallet.address;
 
-    const usdcE = new ethers.Contract(USDC_E_CONTRACT, ERC20_ABI, provider);
-    const usdcN = new ethers.Contract(USDC_NATIVE_CONTRACT, ERC20_ABI, provider);
+    // Interface ERC20 para o balanceOf
+    const iface = new ethers.utils.Interface(ERC20_ABI);
+    const data = iface.encodeFunctionData("balanceOf", [address]);
 
-    const [bE, bN] = await Promise.all([
-      usdcE.balanceOf(address).catch(() => ethers.BigNumber.from(0)),
-      usdcN.balanceOf(address).catch(() => ethers.BigNumber.from(0))
-    ]);
+    // Chama o RPC via fetch (mais robusto que provider.balanceOf)
+    const response = await fetch("https://polygon-rpc.com", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_call",
+        params: [
+          {
+            to: USDC_NATIVE_CONTRACT,
+            data: data
+          },
+          "latest"
+        ]
+      })
+    });
 
-    const balance = parseFloat(ethers.utils.formatUnits(bE.add(bN), 6));
-    return { ok: true, usdc: balance, address };
+    const json = await response.json();
+    if (json.error) throw new Error(json.error.message);
+
+    const balance = ethers.BigNumber.from(json.result);
+    const formatted = parseFloat(ethers.utils.formatUnits(balance, 6));
+
+    return { ok: true, usdc: formatted, address };
   } catch (e) {
     return { ok: false, usdc: 0, address: null };
   }
