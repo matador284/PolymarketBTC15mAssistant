@@ -83,5 +83,9 @@ export const CONFIG = {
     apiKey: process.env.AUTO_TRADE_API_KEY || "",
     apiSecret: process.env.AUTO_TRADE_API_SECRET || "",
     apiPassphrase: process.env.AUTO_TRADE_API_PASSPHRASE || "",
+    // Stop Loss (sessão): encerra se o saldo da sessão cair abaixo de -X USD
+    stopLossUsd: Number(process.env.AUTO_TRADE_STOP_LOSS || "0"),
+    // Take Profit (sessão): encerra se o saldo da sessão subir acima de +X USD
+    takeProfitUsd: Number(process.env.AUTO_TRADE_TAKE_PROFIT || "0"),
   }
 };

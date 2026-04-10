@@ -21,6 +21,15 @@ export async function fetchMarketBySlug(slug) {
   return market;
 }
 
+export async function fetchEventBySlug(slug) {
+  const url = new URL("/events", CONFIG.gammaBaseUrl);
+  url.searchParams.set("slug", slug);
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] : null;
+}
+
 export async function fetchMarketsBySeriesSlug({ seriesSlug, limit = 50 }) {
   const url = new URL("/markets", CONFIG.gammaBaseUrl);
   url.searchParams.set("seriesSlug", seriesSlug);

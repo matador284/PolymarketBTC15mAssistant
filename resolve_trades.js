@@ -20,14 +20,15 @@ async function run() {
   let unresolved = 0;
 
   console.log("Analyzing Trades P&L...\n");
-  console.log("TIME\tMARKET\t\tSIDE\tEDGE\tCONF\tRESULT\t\tPROFIT ($)");
-  console.log("-".repeat(95));
+  console.log("DATE/TIME\tMARKET\t\tSIDE\tEDGE\tCONF\tRESULT\t\tPROFIT ($)");
+  console.log("-".repeat(105));
 
   let totalNetProfit = 0;
 
   for (const line of lines) {
     const parts = line.split(",");
-    const ts = parts[0].substring(11, 16);
+    const rawTs = new Date(parts[0]);
+    const ts = `${String(rawTs.getDate()).padStart(2, '0')}/${String(rawTs.getMonth() + 1).padStart(2, '0')} ${parts[0].substring(11, 16)}`;
     const slug = parts[1];
     const side = parts[2];
     const amount = parseFloat(parts[3]) || 10;

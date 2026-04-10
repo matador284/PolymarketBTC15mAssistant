@@ -24,7 +24,9 @@ import { computeSupertrend } from "./indicators/supertrend.js";
 import { detectRegime } from "./engines/regime.js";
 import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
 import { computeEdge, decide } from "./engines/edge.js";
-import { shouldAutoTrade, executeTrade, getAutoTradeStatus, resetMarketState } from "./engines/autoTrade.js";
+import { shouldAutoTrade, executeTrade, getAutoTradeStatus, resetMarketState, updateSessionPnL } from "./engines/autoTrade.js";
+import { getAIBriefing } from "./engines/aiBriefing.js";
+import { getWhaleSentiment } from "./engines/whaleSpy.js";
 import { getSelfLearningBias } from "./engines/optimizer.js";
 import { analyzeMacroTrend } from "./engines/macro.js";
 import { appendCsvRow, formatNumber, formatPct, formatSignedPct, getCandleWindowTiming, sleep } from "./utils.js";
@@ -486,6 +488,7 @@ async function main() {
 
   while (true) {
     const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
+    await updateSessionPnL();
 
     const wsTick = binanceStream.getLast();
     const wsPrice = wsTick?.price ?? null;
@@ -513,6 +516,9 @@ async function main() {
         fetchPolymarketSnapshot(),
         getSelfLearningBias()
       ]);
+
+      const aiBriefing = await getAIBriefing(klines1d, klines1w);
+      const whaleData = await getWhaleSentiment(poly.ok ? poly.market?.slug : null);
 
       if (!poly.ok) {
         const w = screenWidth();
@@ -630,7 +636,9 @@ async function main() {
         stochRsi,
         supertrend,
         macroBias: macro.biasValue,
-        learningBias: (learning.upBias || 0) - (learning.downBias || 0)
+        learningBias: (learning.upBias || 0) - (learning.downBias || 0),
+        aiBias: aiBriefing.bias,
+        whaleBias: whaleData.bias
       });
 
       const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, CONFIG.candleWindowMinutes);
@@ -838,6 +846,8 @@ async function main() {
       // Confidence bar
       const confBarStr = confidenceBar(scored.confidence, 15);
 
+      const tradeStatus = getAutoTradeStatus();
+
       const w = screenWidth();
 
       const lines = [
@@ -850,7 +860,11 @@ async function main() {
         kv("Market:", poly.ok ? (poly.market?.slug ?? "-") : "-"),
         kv("Time left:", `${timeColor}${ANSI.bold}${fmtTimeLeft(timeLeftMin)}${ANSI.reset}  ${ANSI.gray}| Phase: ${timeAware.phase}${ANSI.reset}`),
         kv("Macro Context:", `${macro.bias === "STRONG_BULLISH" ? ANSI.green : macro.bias === "STRONG_BEARISH" ? ANSI.red : ANSI.cyan}${macro.bias}${ANSI.reset} ${ANSI.gray}(1D: ${macro.dTrend}, 1W: ${macro.wTrend})${ANSI.reset}`),
+        kv("AI Pre-Market:", aiBriefing.enabled ? `${aiBriefing.bias > 0 ? ANSI.green : aiBriefing.bias < 0 ? ANSI.red : ANSI.gray}${aiBriefing.sentiment}${ANSI.reset} ${ANSI.gray}(Bias: ${formatSignedPct(aiBriefing.bias)}) - ${aiBriefing.reasoning}${ANSI.reset}` : `${ANSI.gray}OFF${ANSI.reset}`),
+        kv("🐋 Baleias:", whaleData.ok ? `${whaleData.signal.includes("UP") ? ANSI.green : whaleData.signal.includes("DOWN") ? ANSI.red : ANSI.gray}${whaleData.signal}${ANSI.reset} ${ANSI.gray}(UP: $${whaleData.upVolume.toFixed(0)} | DOWN: $${whaleData.downVolume.toFixed(0)} | ${whaleData.whaleCount} baleias)${ANSI.reset}` : `${ANSI.gray}Aguardando dados...${ANSI.reset}`),
         kv("Self-Learning:", `${(learning.upBias || 0) > 0 ? ANSI.green : (learning.downBias || 0) > 0 ? ANSI.red : ANSI.gray}${learning.streak || "OFF"}${ANSI.reset} ${ANSI.gray}(Recent Bias: ${formatSignedPct((learning.upBias || 0) - (learning.downBias || 0))})${ANSI.reset}`),
+        kv("Session P&L:", `${tradeStatus.sessionPnl >= 0 ? ANSI.green : ANSI.red}${tradeStatus.sessionPnl >= 0 ? "+" : ""}$${tradeStatus.sessionPnl.toFixed(2)}${ANSI.reset} ${ANSI.gray}(SL: -$${tradeStatus.stopLoss} | TP: +$${tradeStatus.takeProfit})${ANSI.reset}`),
+        kv("Win Rate:", `${tradeStatus.winRate}% ${ANSI.gray}(W: ${tradeStatus.wins} | L: ${tradeStatus.losses})${ANSI.reset}`),
         "",
         `  ${sepLine()}`,
         "",

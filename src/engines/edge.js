@@ -62,6 +62,10 @@ export function decide({
   if (bestSide === "UP" && regime === "TREND_DOWN") {
     return { action: "NO_TRADE", side: null, phase, reason: "anti_trend_down", strength: null, edge: bestEdge };
   }
+  
+  if (regime === "CHOP" && bestEdge < 0.25) {
+    return { action: "NO_TRADE", side: null, phase, reason: "chop_market_danger", strength: null, edge: bestEdge };
+  }
 
   // ──── FILTERS ────
   if (remainingMinutes < 0.3) {

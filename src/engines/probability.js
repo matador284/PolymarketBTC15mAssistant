@@ -27,7 +27,9 @@ export function scoreDirection(inputs) {
     stochRsi,     // Stochastic RSI data
     supertrend,   // Supertrend data
     macroBias,    // Macro Trend Bias (-0.05 to +0.05)
-    learningBias  // Self-Learning Bias (-0.05 to +0.05)
+    learningBias, // Self-Learning Bias (-0.05 to +0.05)
+    aiBias,       // AI Generative Briefing Bias (-0.1 to +0.1)
+    whaleBias     // Whale Spy Bias (-0.08 to +0.08)
   } = inputs;
 
   let up = 0;
@@ -187,10 +189,12 @@ export function scoreDirection(inputs) {
   const total = up + down;
   const initialUp = total > 0 ? up / total : 0.5;
 
-  // Apply macro and learning biases
-  // Macro bias: -0.05 to +0.05 (Trend de dias/meses)
-  // Learning bias: -0.05 to +0.05 (Otimizacao por historico)
-  const rawUp = clamp(initialUp + (macroBias || 0) + (learningBias || 0), 0, 1);
+  // Apply macro, learning, AI and whale biases
+  // Macro bias: -0.05 to +0.05
+  // Learning bias: -0.05 to +0.05
+  // AI bias: -0.1 a +0.1
+  // Whale bias: -0.08 a +0.08 (volume das baleias no mercado atual)
+  const rawUp = clamp(initialUp + (macroBias || 0) + (learningBias || 0) + (aiBias || 0) + (whaleBias || 0), 0, 1);
 
   // Confidence: how far from 50/50
   const confidence = Math.abs(rawUp - 0.5) * 2;

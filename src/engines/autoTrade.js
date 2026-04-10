@@ -1,6 +1,7 @@
 import { CONFIG } from "../config.js";
 import { appendCsvRow } from "../utils.js";
 import { ClobClient } from "@polymarket/clob-client";
+import { fetchEventBySlug } from "../data/polymarket.js";
 import { Wallet } from "ethers";
 
 let clobClient = null;
@@ -110,6 +111,14 @@ export function shouldAutoTrade({
     return { trade: false, reason: `cooldown (${remaining}s left)` };
   }
 
+  // Stop Loss/Take Profit Checks
+  if (cfg.stopLossUsd > 0 && tradeState.sessionPnl <= -cfg.stopLossUsd) {
+    return { trade: false, reason: `stop_loss_reached (-$${Math.abs(tradeState.sessionPnl).toFixed(2)} / -$${cfg.stopLossUsd})` };
+  }
+  if (cfg.takeProfitUsd > 0 && tradeState.sessionPnl >= cfg.takeProfitUsd) {
+    return { trade: false, reason: `take_profit_reached (+$${tradeState.sessionPnl.toFixed(2)} / +$${cfg.takeProfitUsd})` };
+  }
+
   // Max trades per market check
   if (marketSlug && tradeState.activeMarketSlug === marketSlug && tradeState.tradesThisMarket >= cfg.maxTradesPerMarket) {
     return { trade: false, reason: `max_trades_reached (${cfg.maxTradesPerMarket})` };
@@ -169,6 +178,7 @@ export async function executeTrade({
     edge: edge?.toFixed(4) ?? "-",
     phase,
     strength,
+    resolved: false,
     timeLeftMin: timeLeftMin?.toFixed(2) ?? "-",
     currentPrice: currentPrice?.toFixed(2) ?? "-",
     priceToBeat: priceToBeat?.toFixed(2) ?? "-",
@@ -295,9 +305,56 @@ export function getAutoTradeStatus() {
     lastTradeAge: tradeState.lastTradeMs > 0 ? Math.floor((now - tradeState.lastTradeMs) / 1000) : null,
     wins: tradeState.wins,
     losses: tradeState.losses,
-    winRate: tradeState.totalTrades > 0 ? (tradeState.wins / tradeState.totalTrades * 100).toFixed(1) : "-",
+    winRate: (tradeState.wins + tradeState.losses) > 0 ? (tradeState.wins / (tradeState.wins + tradeState.losses) * 100).toFixed(1) : "-",
     recentTrades: tradeState.tradeHistory.slice(-5),
+    sessionPnl: tradeState.sessionPnl,
+    stopLoss: cfg.stopLossUsd,
+    takeProfit: cfg.takeProfitUsd,
   };
+}
+
+/**
+ * Update session P&L by checking results of pending trades.
+ */
+export async function updateSessionPnL() {
+  const unresolved = tradeState.tradeHistory.filter((t) => !t.resolved && t.marketSlug !== "-");
+  if (unresolved.length === 0) return;
+
+  for (const t of unresolved) {
+    try {
+      const event = await fetchEventBySlug(t.marketSlug);
+      if (!event) continue;
+
+      const market = event.markets?.[0];
+      if (market && market.closed) {
+        const prices = JSON.parse(market.outcomePrices || "[]");
+        const outcomes = JSON.parse(market.outcomes || "[]");
+        let winningIndex = -1;
+        if (prices[0] === "1" || prices[0] === 1) winningIndex = 0;
+        else if (prices[1] === "1" || prices[1] === 1) winningIndex = 1;
+
+        if (winningIndex !== -1) {
+          const actualWinner = outcomes[winningIndex].toUpperCase();
+          const isWin = actualWinner === t.side;
+
+          t.resolved = true;
+          t.winner = actualWinner;
+          t.isWin = isWin;
+
+          const conf = parseFloat(t.confidence) || 0.5;
+          const edge = parseFloat(t.edge) || 0.05;
+          const sharePrice = Math.max(0.01, Math.min(0.99, conf - edge));
+          const profit = isWin ? (t.amount / sharePrice) - t.amount : -t.amount;
+
+          tradeState.sessionPnl += profit;
+          if (isWin) tradeState.wins++;
+          else tradeState.losses++;
+        }
+      }
+    } catch (e) {
+      // Ignore network errors
+    }
+  }
 }
 
 /**
