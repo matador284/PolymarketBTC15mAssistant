@@ -935,9 +935,16 @@ async function main() {
         lines.push(kv("Mode:", modeLabel));
         lines.push(kv("Amount:", `$${ats.amount}`));
         
-        const balVal = walletBal.ok ? `$${walletBal.usdc.toFixed(2)}` : `${ANSI.gray}[Erro RPC]${ANSI.reset}`;
+        const balVal = walletBal.ok ? `$${walletBal.usdc.toFixed(2)}` : `${ANSI.red}[Erro: ${walletBal.error || "RPC"}]${ANSI.reset}`;
         const balColor = (walletBal.ok && walletBal.usdc >= ats.amount) ? ANSI.green : ANSI.red;
         lines.push(kv("💰 WALLET USDC:", `${balColor}${ANSI.bold}${balVal}${ANSI.reset}`));
+        
+        // Debug de endereços
+        const walletAddr = ats.address || "-";
+        lines.push(kv("Address (EOA):", `${ANSI.dim}${walletAddr.substring(0, 10)}...${walletAddr.substring(34)}${ANSI.reset}`));
+        if (walletBal.address && walletBal.address !== walletAddr) {
+          lines.push(kv("Proxy Wallet:", `${ANSI.dim}${walletBal.address.substring(0, 10)}...${walletBal.address.substring(34)}${ANSI.reset}`));
+        }
 
         lines.push(kv("Min Conf:", `${(ats.minConfidence * 100).toFixed(0)}% | Min Edge: ${(ats.minEdge * 100).toFixed(0)}%`));
         lines.push(kv("Trades:", `${ats.totalTrades} total | ${ANSI.green}W:${ats.wins}${ANSI.reset} / ${ANSI.red}L:${ats.losses}${ANSI.reset}`));
