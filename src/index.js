@@ -949,7 +949,11 @@ async function main() {
           lines.push(kv("Status:", `${ANSI.green}${ANSI.bold}TRADE EXECUTED! ${tradeCheck.side} $${tradeCheck.amount}${ANSI.reset}`));
         }
         if (lastAutoTradeResult) {
-          lines.push(kv("Last Trade:", `${lastAutoTradeResult.record.side} $${lastAutoTradeResult.record.amount} @ ${lastAutoTradeResult.record.timestamp.substring(11, 19)} [${lastAutoTradeResult.mode}]`));
+          if (lastAutoTradeResult.record) {
+            lines.push(kv("Last Trade:", `${lastAutoTradeResult.record.side} $${lastAutoTradeResult.record.amount} @ ${lastAutoTradeResult.record.timestamp.substring(11, 19)} [${lastAutoTradeResult.mode}]`));
+          } else if (lastAutoTradeResult.error) {
+            lines.push(kv("Last Fail:", `${ANSI.red}${lastAutoTradeResult.error}${ANSI.reset}`));
+          }
         }
         lines.push("");
         lines.push(`  ${sepLine()}`);
