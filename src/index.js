@@ -941,9 +941,17 @@ async function main() {
         
         // Debug de endereços
         const walletAddr = ats.address || "-";
-        lines.push(kv("Address (EOA):", `${ANSI.dim}${walletAddr.substring(0, 10)}...${walletAddr.substring(34)}${ANSI.reset}`));
+        const displayAddr = (walletAddr && walletAddr.length > 40) 
+          ? `${walletAddr.substring(0, 10)}...${walletAddr.substring(34)}`
+          : walletAddr;
+        lines.push(kv("Address (EOA):", `${ANSI.dim}${displayAddr}${ANSI.reset}`));
+        
         if (walletBal.address && walletBal.address !== walletAddr) {
-          lines.push(kv("Proxy Wallet:", `${ANSI.dim}${walletBal.address.substring(0, 10)}...${walletBal.address.substring(34)}${ANSI.reset}`));
+          const proxyAddr = walletBal.address;
+          const displayProxy = (proxyAddr && proxyAddr.length > 40)
+            ? `${proxyAddr.substring(0, 10)}...${proxyAddr.substring(34)}`
+            : proxyAddr;
+          lines.push(kv("Proxy Wallet:", `${ANSI.dim}${displayProxy}${ANSI.reset}`));
         }
 
         lines.push(kv("Min Conf:", `${(ats.minConfidence * 100).toFixed(0)}% | Min Edge: ${(ats.minEdge * 100).toFixed(0)}%`));
