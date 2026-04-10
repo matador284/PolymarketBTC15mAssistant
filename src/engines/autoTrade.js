@@ -2,7 +2,7 @@ import { CONFIG } from "../config.js";
 import { appendCsvRow } from "../utils.js";
 import { ClobClient } from "@polymarket/clob-client";
 import { fetchEventBySlug } from "../data/polymarket.js";
-import { Wallet, JsonRpcProvider } from "ethers";
+import { Wallet } from "ethers";
 
 let clobClient = null;
 
@@ -13,10 +13,9 @@ async function getClobClient() {
     throw new Error("Missing CLOB API credentials in .env");
   }
 
-  // ethers v6: a wallet precisa de um provider para ter address
-  const provider = new JsonRpcProvider("https://polygon-rpc.com");
-  const wallet = new Wallet(cfg.privateKey, provider);
-  
+  // ethers v5: Wallet tem address direto sem precisar de provider
+  const wallet = new Wallet(cfg.privateKey);
+
   clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, {
     key: cfg.apiKey,
     secret: cfg.apiSecret,
