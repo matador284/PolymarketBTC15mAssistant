@@ -235,7 +235,7 @@ export async function executeTrade({
       side: "BUY", // In Polymarket, you always 'BUY' the outcome (Yes or No)
     });
 
-    tradeRecord.status = orderResp.success ? "LIVE_EXECUTED" : "LIVE_FAILED";
+    tradeRecord.status = orderResp.success ? "LIVE_EXECUTED" : `LIVE_FAILED: ${orderResp.errorMessage || orderResp.error || "Unknown"}`;
     tradeRecord.orderId = orderResp.orderID || "-";
     
     // Log the trade
