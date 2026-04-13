@@ -277,12 +277,20 @@ export async function executeTrade({
     // 1. Checagem de Saldo (USDC)
     const client = await getClobClient();
     
-    // Market Order: passa o valor em USD diretamente
-    // Para BUY: amount = dolares a gastar (min $1)
-    const orderResp = await client.createAndPostMarketOrder({
+    // Calcula o número de ações (shares) garantindo que o valor final seja >= $1.00
+    // amount é o valor em dólares (ex: $1). outcomePrice é o preço atual (ex: $0.80)
+    // Math.ceil arredonda para cima (1 / 0.80 = 1.25 -> 2 shares)
+    const orderSize = Math.ceil(Math.max(1, amount) / outcomePrice);
+    
+    // Define um preço limite com leve tolerancia (+2 cents) para garantir execução em movimentos rapidos
+    const orderPrice = Math.min(0.99, outcomePrice + 0.02);
+
+    // Ordem Limite (GTC) não é morta automaticamente se só conseguir preencher parte.
+    const orderResp = await client.createAndPostOrder({
       tokenID: tokenId,
-      side: "BUY",
-      amount: Math.max(1, amount), // garante minimo de $1
+      price: orderPrice,
+      size: orderSize,
+      side: "BUY", 
     });
 
     tradeRecord.status = orderResp.success ? "LIVE_EXECUTED" : `LIVE_FAILED: ${orderResp.errorMessage || orderResp.error || "Unknown"}`;
