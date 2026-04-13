@@ -277,10 +277,11 @@ export async function executeTrade({
     // 1. Checagem de Saldo (USDC)
     const client = await getClobClient();
     
-    // Calcula o número de ações (shares) garantindo que o valor final seja >= $1.00
-    // amount é o valor em dólares (ex: $1). outcomePrice é o preço atual (ex: $0.80)
-    // Math.ceil arredonda para cima (1 / 0.80 = 1.25 -> 2 shares)
-    const orderSize = Math.ceil(Math.max(1, amount) / outcomePrice);
+    // Calcula o número de ações (shares) baseado no seu valor em dólares
+    // ATENÇÃO: Polymarket agora exige no MÍNIMO 5 shares por aposta como regra do servidor!
+    // Se o valor em dólar que você pediu der menos que 5 shares, ele vai forçar 5 shares para a ordem não ser rejeitada.
+    let baseSize = Math.ceil(Math.max(1, amount) / outcomePrice);
+    const orderSize = Math.max(5, baseSize);
     
     // Define um preço limite com leve tolerancia (+2 cents) para garantir execução em movimentos rapidos
     const orderPrice = Math.min(0.99, outcomePrice + 0.02);
