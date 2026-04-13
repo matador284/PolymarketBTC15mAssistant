@@ -4,6 +4,17 @@ import { ClobClient } from "@polymarket/clob-client";
 import { fetchEventBySlug } from "../data/polymarket.js";
 import { getWalletBalance } from "../data/walletBalance.js";
 import { Wallet } from "ethers";
+import fs from 'fs';
+import { SafetyAudit } from "./safetyAudit.js";
+
+const RULES_PATH = './rules.json';
+function loadRules() {
+  try {
+    return JSON.parse(fs.readFileSync(RULES_PATH, 'utf8'));
+  } catch (e) {
+    return { trading: { min_edge: 0.05, max_edge_trap: 0.50 } }; // Fallback básico
+  }
+}
 
 let clobClient = null;
 
@@ -79,58 +90,81 @@ export function shouldAutoTrade({
   if (!enabled) return { trade: false, reason: "disabled" };
 
   const cfg = CONFIG.autoTrade;
+  const rules = loadRules();
+  const checks = {
+    passed: false,
+    reason: "unknown",
+    details: {}
+  };
 
-  if (cfg.tradeAmountUsd <= 0) return { trade: false, reason: "amount_not_set" };
+  if (cfg.tradeAmountUsd <= 0) {
+    checks.reason = "amount_not_set";
+    return { trade: false, reason: checks.reason };
+  }
 
-  if (decision.action !== "ENTER") return { trade: false, reason: `no_signal (${decision.reason})` };
+  if (decision.action !== "ENTER") {
+    checks.reason = `no_signal (${decision.reason})`;
+    return { trade: false, reason: checks.reason };
+  }
 
   const bestModel = decision.side === "UP" ? modelUp : modelDown;
+  const metrics = {
+    confidence: bestModel,
+    edge: decision.edge,
+    timeLeft: timeLeftMin,
+    strength: decision.strength
+  };
 
-  // Confidence check
-  if (bestModel !== null && bestModel < cfg.minConfidence) {
-    return { trade: false, reason: `confidence_below_${cfg.minConfidence} (${bestModel?.toFixed(3)})` };
-  }
+  // Checklist de Auditoria (Inspirado no projeto GitHub)
+  const checklist = [];
+  
+  // 1. Confiança
+  const lowConf = bestModel !== null && bestModel < cfg.minConfidence;
+  checklist.push({ name: "confidence", ok: !lowConf, val: bestModel });
 
-  // Edge check
-  if (decision.edge !== null && decision.edge < cfg.minEdge) {
-    return { trade: false, reason: `edge_below_${cfg.minEdge} (${decision.edge?.toFixed(3)})` };
-  }
-  if (decision.edge !== null && decision.edge > cfg.maxEdge) {
-    return { trade: false, reason: `edge_trap_ignored (> ${cfg.maxEdge})` };
-  }
+  // 2. Edge (Vantagem)
+  const lowEdge = decision.edge !== null && decision.edge < cfg.minEdge;
+  const edgeTrap = decision.edge !== null && decision.edge > cfg.maxEdge;
+  checklist.push({ name: "edge", ok: !lowEdge && !edgeTrap, val: decision.edge });
 
-  // Time window check
-  if (timeLeftMin < cfg.minTimeLeftMin) {
-    return { trade: false, reason: `too_late (${timeLeftMin.toFixed(1)}m < ${cfg.minTimeLeftMin}m)` };
-  }
-  if (timeLeftMin > cfg.maxTimeLeftMin) {
-    return { trade: false, reason: `too_early (${timeLeftMin.toFixed(1)}m > ${cfg.maxTimeLeftMin}m)` };
-  }
+  // 3. Janela de Tempo
+  const timeOk = timeLeftMin >= cfg.minTimeLeftMin && timeLeftMin <= cfg.maxTimeLeftMin;
+  checklist.push({ name: "time_window", ok: timeOk, val: timeLeftMin });
 
-  // Cooldown check
+  // 4. Cooldown
   const now = Date.now();
-  if (now - tradeState.lastTradeMs < cfg.cooldownMs) {
-    const remaining = ((cfg.cooldownMs - (now - tradeState.lastTradeMs)) / 1000).toFixed(0);
-    return { trade: false, reason: `cooldown (${remaining}s left)` };
+  const cooldownOk = (now - tradeState.lastTradeMs >= cfg.cooldownMs);
+  checklist.push({ name: "cooldown", ok: cooldownOk });
+
+  // 5. Gestão de Risco (SL/TP)
+  const slReached = cfg.stopLossUsd > 0 && tradeState.sessionPnl <= -cfg.stopLossUsd;
+  const tpReached = cfg.takeProfitUsd > 0 && tradeState.sessionPnl >= cfg.takeProfitUsd;
+  checklist.push({ name: "risk_management", ok: !slReached && !tpReached });
+
+  // Consolidação
+  const failed = checklist.find(c => !c.ok);
+  if (failed) {
+    checks.passed = false;
+    checks.reason = failed.name;
+    checks.details = checklist;
+    
+    // Log detalhado da falha (Audit)
+    SafetyAudit.logCheck({ marketSlug, side: decision.side, ...metrics }, rules, checks);
+    
+    // Converte para o formato de retorno legível
+    let displayReason = failed.name;
+    if (failed.name === "confidence") displayReason = `confidence_below_${cfg.minConfidence} (${bestModel?.toFixed(2)})`;
+    if (failed.name === "edge") displayReason = lowEdge ? "low_edge" : "edge_trap";
+    
+    return { trade: false, reason: displayReason };
   }
 
-  // Stop Loss/Take Profit Checks
-  if (cfg.stopLossUsd > 0 && tradeState.sessionPnl <= -cfg.stopLossUsd) {
-    return { trade: false, reason: `stop_loss_reached (-$${Math.abs(tradeState.sessionPnl).toFixed(2)} / -$${cfg.stopLossUsd})` };
-  }
-  if (cfg.takeProfitUsd > 0 && tradeState.sessionPnl >= cfg.takeProfitUsd) {
-    return { trade: false, reason: `take_profit_reached (+$${tradeState.sessionPnl.toFixed(2)} / +$${cfg.takeProfitUsd})` };
-  }
-
-  // Max trades per market check
-  if (marketSlug && tradeState.activeMarketSlug === marketSlug && tradeState.tradesThisMarket >= cfg.maxTradesPerMarket) {
-    return { trade: false, reason: `max_trades_reached (${cfg.maxTradesPerMarket})` };
-  }
-
-  // Strength filter: don't auto-trade weak signals
-  if (decision.strength === "WEAK") {
-    return { trade: false, reason: "signal_too_weak" };
-  }
+  // Se tudo passou
+  checks.passed = true;
+  checks.reason = "all_checks_passed";
+  checks.details = checklist;
+  
+  SafetyAudit.logCheck({ marketSlug, side: decision.side, ...metrics }, rules, checks);
 
   return {
     trade: true,

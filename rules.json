@@ -1,0 +1,24 @@
+{
+  "trading": {
+    "min_confidence_radical": 0.70,
+    "min_confidence_balanced": 0.76,
+    "min_confidence_sniper": 0.82,
+    "min_edge": 0.05,
+    "max_edge_trap": 0.50,
+    "min_time_left_m": 0.5,
+    "max_trades_per_market": 1,
+    "trade_cooldown_s": 60,
+    "max_slippage_percent": 2
+  },
+  "safety": {
+    "block_on_error_rpc": false,
+    "require_wallet_balance": false,
+    "max_daily_loss_usd": 50,
+    "max_session_drawdown_percent": 10
+  },
+  "market_regime": {
+    "allow_anti_trend": false,
+    "require_min_volume_x": 0.5,
+    "max_volatility_atr_percent": 0.5
+  }
+}
