@@ -1,6 +1,6 @@
 import { CONFIG } from "../config.js";
 import { appendCsvRow } from "../utils.js";
-import { ClobClient } from "@polymarket/clob-client";
+import { ClobClient, SignatureType } from "@polymarket/clob-client";
 import { fetchEventBySlug } from "../data/polymarket.js";
 import { getWalletBalance } from "../data/walletBalance.js";
 import { Wallet } from "ethers";
@@ -28,11 +28,15 @@ async function getClobClient() {
   // ethers v5: Wallet tem address direto sem precisar de provider
   const wallet = new Wallet(cfg.privateKey);
 
+  // Se tiver funderAddress (proxy), usa POLY_PROXY. Senão usa EOA (0).
+  const sigType = cfg.funderAddress ? SignatureType.POLY_PROXY : SignatureType.EOA;
+
   clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, {
     key: cfg.apiKey,
     secret: cfg.apiSecret,
     passphrase: cfg.apiPassphrase,
-  });
+  }, sigType, cfg.funderAddress);
+  
   return clobClient;
 }
 
