@@ -48,7 +48,7 @@ async function getClobClient() {
     }, sigType, funder);
     
     // Teste de conexão silencioso
-    await clobClient.getSecondaryChannelSubscription(); 
+    // await clobClient.getApiKeyStatus(); 
   } catch (err) {
     console.error(`  [⚠️] Erro ao instanciar CLOB Client: ${err.message}`);
     clobClient = null;
