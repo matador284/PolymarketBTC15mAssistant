@@ -944,14 +944,14 @@ async function main() {
         const displayAddr = (walletAddr && walletAddr.length > 40) 
           ? `${walletAddr.substring(0, 10)}...${walletAddr.substring(34)}`
           : walletAddr;
-        lines.push(kv("Address (EOA):", `${ANSI.dim}${displayAddr}${ANSI.reset}`));
+        lines.push(kv("Signer (Assina):", `${ANSI.dim}${displayAddr}${ANSI.reset}`));
         
-        if (walletBal.address && walletBal.address !== walletAddr) {
-          const proxyAddr = walletBal.address;
+        if (ats.funder && ats.funder !== walletAddr) {
+          const proxyAddr = ats.funder;
           const displayProxy = (proxyAddr && proxyAddr.length > 40)
             ? `${proxyAddr.substring(0, 10)}...${proxyAddr.substring(34)}`
             : proxyAddr;
-          lines.push(kv("Proxy Wallet:", `${ANSI.dim}${displayProxy}${ANSI.reset}`));
+          lines.push(kv("Funder (Cofre):", `${ANSI.dim}${displayProxy}${ANSI.reset}`));
         }
 
         lines.push(kv("Min Conf:", `${(ats.minConfidence * 100).toFixed(0)}% | Min Edge: ${(ats.minEdge * 100).toFixed(0)}%`));

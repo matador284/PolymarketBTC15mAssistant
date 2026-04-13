@@ -379,6 +379,8 @@ export function getAutoTradeStatus() {
     sessionPnl: tradeState.sessionPnl,
     stopLoss: cfg.stopLossUsd,
     takeProfit: cfg.takeProfitUsd,
+    address: cfg.privateKey ? new Wallet(cfg.privateKey).address : "-",
+    funder: cfg.funderAddress || "-"
   };
 }
 
