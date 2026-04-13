@@ -28,14 +28,32 @@ async function getClobClient() {
   // ethers v5: Wallet tem address direto sem precisar de provider
   const wallet = new Wallet(cfg.privateKey);
 
-  // Se tiver funderAddress (proxy), usa POLY_PROXY. Senão usa EOA (0).
-  const sigType = cfg.funderAddress ? SignatureType.POLY_PROXY : SignatureType.EOA;
+  let funder = cfg.funderAddress;
+  if (funder) {
+    try {
+      funder = ethers.utils.getAddress(funder);
+    } catch (e) {
+      console.error(`  [⚠️] Endereço de funder inválido: ${funder}`);
+    }
+  }
 
-  clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, {
-    key: cfg.apiKey,
-    secret: cfg.apiSecret,
-    passphrase: cfg.apiPassphrase,
-  }, sigType, cfg.funderAddress);
+  // Se tiver funderAddress (proxy), usa POLY_PROXY. Senão usa EOA (0).
+  const sigType = funder ? SignatureType.POLY_PROXY : SignatureType.EOA;
+
+  try {
+    clobClient = new ClobClient("https://clob.polymarket.com", 137, wallet, {
+      key: cfg.apiKey,
+      secret: cfg.apiSecret,
+      passphrase: cfg.apiPassphrase,
+    }, sigType, funder);
+    
+    // Teste de conexão silencioso
+    await clobClient.getSecondaryChannelSubscription(); 
+  } catch (err) {
+    console.error(`  [⚠️] Erro ao instanciar CLOB Client: ${err.message}`);
+    clobClient = null;
+    throw err;
+  }
   
   return clobClient;
 }
