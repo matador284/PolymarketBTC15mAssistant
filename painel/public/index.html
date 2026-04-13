@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pt-br" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket BTC Sniper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: '#0f172a',
+                        card: 'rgba(30, 41, 59, 0.7)',
+                        brand: '#10b981',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .glow-green { box-shadow: 0 0 15px rgba(16, 185, 129, 0.3); }
+        .glow-red { box-shadow: 0 0 15px rgba(239, 68, 68, 0.3); }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    </style>
+</head>
+<body class="min-h-screen bg-dark p-4 md:p-8 selection:bg-brand selection:text-white">
+
+    <div class="max-w-7xl mx-auto space-y-6">
+        <!-- HEADER -->
+        <header class="glass rounded-2xl p-6 flex flex-col md:flex-row justify-between items-center gap-4 glow-green">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-full bg-brand/20 flex items-center justify-center">
+                    <i data-lucide="target" class="text-brand w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-white tracking-tight">Polymarket BTC Sniper</h1>
+                    <p class="text-slate-400 text-sm">Dashboard de Alta Frequência (15m/5m)</p>
+                </div>
+            </div>
+            <div class="flex gap-4">
+                <div class="text-center px-4 py-2 bg-slate-800/50 rounded-lg border border-slate-700">
+                    <p class="text-xs text-slate-400 uppercase font-bold">Ordens Executadas</p>
+                    <p class="text-2xl font-black text-brand" id="stat-executed">0</p>
+                </div>
+                <div class="text-center px-4 py-2 bg-slate-800/50 rounded-lg border border-slate-700">
+                    <p class="text-xs text-slate-400 uppercase font-bold">Tentativas/Falhas</p>
+                    <p class="text-2xl font-black text-red-400" id="stat-failed">0</p>
+                </div>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- PAINEL PRINCIPAL DE HISTORY -->
+            <div class="lg:col-span-2 glass rounded-2xl p-6 h-[600px] flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold flex items-center gap-2"><i data-lucide="list"></i> Histórico de Entradas</h2>
+                    <button onclick="fetchTrades()" class="text-xs bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-lg flex items-center gap-2 transition-all">
+                        <i data-lucide="refresh-cw" class="w-3 h-3"></i> Atualizar
+                    </button>
+                </div>
+                
+                <div class="overflow-auto flex-1 pr-2 rounded-xl border border-slate-700/50">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-800/80 sticky top-0 backdrop-blur-md">
+                            <tr>
+                                <th class="p-3 font-medium text-slate-300 rounded-tl-lg">Data / Hora</th>
+                                <th class="p-3 font-medium text-slate-300">Mercado</th>
+                                <th class="p-3 font-medium text-slate-300">Entrada</th>
+                                <th class="p-3 font-medium text-slate-300">Estratégia</th>
+                                <th class="p-3 font-medium text-slate-300 rounded-tr-lg">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-body" class="divide-y divide-slate-800/50">
+                            <!-- Injetado via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- GRAFICO DE PROBABILIDADE -->
+            <div class="glass rounded-2xl p-6 h-[600px] flex flex-col">
+                <h2 class="text-lg font-bold flex items-center gap-2 mb-4"><i data-lucide="activity"></i> Confiança (Entradas Reais)</h2>
+                <div id="chart-container" class="flex-1 rounded-xl overflow-hidden border border-slate-700/50"></div>
+                <p class="text-xs text-slate-400 mt-4 text-center">Este gráfico mostra as 💸 entradas (LIVE_EXECUTED) e qual foi a % de certeza (Preço/Confiança) no momento do tiro do sniper.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        let chart = null;
+        let lineSeries = null;
+        let markersData = [];
+
+        function initChart() {
+            const container = document.getElementById('chart-container');
+            chart = LightweightCharts.createChart(container, {
+                layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#cbd5e1' },
+                grid: { vertLines: { color: 'rgba(51, 65, 85, 0.4)' }, horzLines: { color: 'rgba(51, 65, 85, 0.4)' } },
+                rightPriceScale: { borderColor: 'rgba(51, 65, 85, 0.8)' },
+                timeScale: { borderColor: 'rgba(51, 65, 85, 0.8)', timeVisible: true, secondsVisible: false },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+            });
+
+            lineSeries = chart.addLineSeries({
+                color: '#10b981', lineWidth: 2, crosshairMarkerRadius: 6,
+                areaTopColor: 'rgba(16, 185, 129, 0.4)', areaBottomColor: 'rgba(16, 185, 129, 0.0)',
+            });
+
+            window.addEventListener('resize', () => {
+                chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+            });
+        }
+
+        function formatMarketName(slug) {
+            if (!slug) return "-";
+            const parts = slug.split('-');
+            const time = parts[parts.length - 1]; // ex: 1776097800
+            if (time && time.length >= 10) {
+                const date = new Date(parseInt(time)*1000);
+                return `${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
+            }
+            return slug;
+        }
+
+        async function fetchTrades() {
+            try {
+                const res = await fetch('/api/trades');
+                const trades = await res.json();
+                
+                const tbody = document.getElementById('trades-body');
+                tbody.innerHTML = '';
+                
+                let executedCount = 0;
+                let failedCount = 0;
+                const chartData = [];
+
+                // Lembre-se, vem do mais recente pro mais antigo. Pro grafico precisamos inverter.
+                const reversedForChart = [...trades].reverse();
+
+                reversedForChart.forEach(t => {
+                    if (t.status === 'LIVE_EXECUTED') {
+                        const unix = Math.floor(new Date(t.timestamp).getTime() / 1000);
+                        const confVal = parseFloat(t.confidence);
+                        if (!isNaN(unix) && !isNaN(confVal)) {
+                            chartData.push({ time: unix, value: confVal * 100 }); // em porcentagem
+                        }
+                    }
+                });
+
+                if (lineSeries && chartData.length > 0) {
+                    // Remover duplicatas de time
+                    const uniqueData = Array.from(new Map(chartData.map(item => [item.time, item])).values());
+                    // Ordenar por hora crescente
+                    uniqueData.sort((a,b) => a.time - b.time);
+                    lineSeries.setData(uniqueData);
+                    chart.timeScale().fitContent();
+                }
+
+                trades.forEach(t => {
+                    const isExecuted = t.status === 'LIVE_EXECUTED';
+                    if (isExecuted) executedCount++; else failedCount++;
+
+                    const dateObj = new Date(t.timestamp);
+                    const timeStr = `${dateObj.getHours().toString().padStart(2,'0')}:${dateObj.getMinutes().toString().padStart(2,'0')}:${dateObj.getSeconds().toString().padStart(2,'0')}`;
+                    
+                    const pricePerc = t.confidence ? (parseFloat(t.confidence) * 100).toFixed(1) + '%' : '-';
+                    const expColor = t.phase === 'MID' ? 'text-blue-400' : 'text-purple-400';
+                    const strColor = t.strength === 'STRONG' ? 'text-brand font-bold' : 'text-slate-300';
+                    
+                    const statusHtml = isExecuted 
+                        ? `<span class="px-2 py-1 rounded bg-brand/20 text-brand text-xs font-bold border border-brand/30"><i data-lucide="check-circle" class="w-3 h-3 inline mr-1"></i> COMPRA EFETUADA</span>`
+                        : `<span class="px-2 py-1 rounded bg-red-500/20 text-red-400 text-xs truncate max-w-[150px] inline-block align-bottom" title="${t.status}"><i data-lucide="x-circle" class="w-3 h-3 inline mr-1"></i> ${t.status.substring(0, 20)}...</span>`;
+
+                    const row = document.createElement('tr');
+                    row.className = "hover:bg-slate-700/30 transition-colors";
+                    row.innerHTML = `
+                        <td class="p-3 text-slate-400 font-mono tracking-tighter">${timeStr}</td>
+                        <td class="p-3 font-bold text-white">BTC ${formatMarketName(t.market)}</td>
+                        <td class="p-3"><span class="font-bold text-brand mr-2">${t.side}</span> <span class="bg-slate-800 px-1.5 py-0.5 rounded text-xs border border-slate-700">${pricePerc}</span></td>
+                        <td class="p-3 text-xs"><span class="${expColor}">${t.phase}</span> | <span class="${strColor}">${t.strength}</span></td>
+                        <td class="p-3">${statusHtml}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                document.getElementById('stat-executed').innerText = executedCount;
+                document.getElementById('stat-failed').innerText = failedCount;
+                lucide.createIcons();
+
+            } catch(e) {
+                console.error("Erro ao puxar trades:", e);
+            }
+        }
+
+        initChart();
+        fetchTrades();
+        setInterval(fetchTrades, 15000); // Atualiza a cada 15 segundos
+    </script>
+</body>
+</html>
