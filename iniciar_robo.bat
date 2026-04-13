@@ -64,6 +64,30 @@ if "%mode%"=="1" (
 echo Aguarde, carregando motor de inteligencia...
 echo.
 
+echo -------------------------------------------------------
+echo  [DIAGNOSTICO] Verificando conexao com a Polymarket...
+echo -------------------------------------------------------
+node --env-file=.env diagnose_final.js > temp_diagnostic.txt 2>&1
+findstr /C:"SUCESSO" temp_diagnostic.txt > nul
+if errorlevel 1 (
+    echo.
+    echo *** ERRO: Falha ao conectar com a Polymarket! ***
+    echo.
+    type temp_diagnostic.txt
+    echo.
+    echo -------------------------------------------------------
+    echo  Verifique as suas credenciais no arquivo .env
+    echo  e rode o gerar_chaves.bat para regenerar as chaves.
+    echo -------------------------------------------------------
+    del temp_diagnostic.txt
+    pause
+    exit /b 1
+) else (
+    echo  [OK] API da Polymarket: CONECTADO E AUTORIZADO! ✓
+    del temp_diagnostic.txt
+)
+echo.
+
 node --env-file=.env src/index.js
 
 pause
