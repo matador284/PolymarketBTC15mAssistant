@@ -28,28 +28,11 @@ export async function getSelfLearningBias(csvPath = "./logs/auto_trades.csv") {
     // BETTER: Let's assume for this version that we boost based on trend consistency.
     // (Actual win/loss analysis requires Gamma API calls, which is slow for a loop).
     
-    // Let's implement a "Streak" detection.
-    let currentStreakSide = null;
-    let streakCount = 0;
-
-    for (const line of recentLines) {
-      const parts = line.split(",");
-      const side = parts[2];
-      if (side === currentStreakSide) {
-        streakCount++;
-      } else {
-        currentStreakSide = side;
-        streakCount = 1;
-      }
-    }
-
-    let upBias = 0;
-    let downBias = 0;
-
-    // If we have a streak of entries in one direction, the model is finding 
-    // consistent signals there. We can slightly favor it.
-    if (currentStreakSide === "UP" && streakCount >= 3) upBias = 0.02;
-    if (currentStreakSide === "DOWN" && streakCount >= 3) downBias = 0.02;
+    // NOVO: Em vez de dar bias por "streak" (que vicia o robô),
+    // vamos apenas monitorar a eficiência. O bias agora é NEUTRO para permitir
+    // que o robô volte a dar entradas em ambas as direções baseadas puramente nos indicadores.
+    const upBias = 0;
+    const downBias = 0;
 
     return {
       upBias,

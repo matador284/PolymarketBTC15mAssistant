@@ -55,12 +55,13 @@ export function decide({
   const bestEdge = bestSide === "UP" ? edgeUp : edgeDown;
   const bestModel = bestSide === "UP" ? modelUp : modelDown;
 
-  // ──── TREND FILTER (Avoid counter-trading strong trends) ────
-  if (bestSide === "DOWN" && regime === "TREND_UP") {
-    return { action: "NO_TRADE", side: null, phase, reason: "anti_trend_up", strength: null, edge: bestEdge };
+  // ──── TREND FILTER (Avoid counter-trading strong trends unless edge is very high) ────
+  // Se o lucro esperado (edge) for > 15%, permitimos operar contra a tendência (Mean Reversion)
+  if (bestSide === "DOWN" && regime === "TREND_UP" && bestEdge < 0.15) {
+    return { action: "NO_TRADE", side: null, phase, reason: "anti_trend_up (edge_low)", strength: null, edge: bestEdge };
   }
-  if (bestSide === "UP" && regime === "TREND_DOWN") {
-    return { action: "NO_TRADE", side: null, phase, reason: "anti_trend_down", strength: null, edge: bestEdge };
+  if (bestSide === "UP" && regime === "TREND_DOWN" && bestEdge < 0.15) {
+    return { action: "NO_TRADE", side: null, phase, reason: "anti_trend_down (edge_low)", strength: null, edge: bestEdge };
   }
   
   if (regime === "CHOP" && bestEdge < 0.25) {

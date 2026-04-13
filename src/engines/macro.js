@@ -30,16 +30,16 @@ export function analyzeMacroTrend(klines1d, klines1w) {
 
   if (dTrend === "BULLISH" && wTrend === "BULLISH") {
     bias = "STRONG_BULLISH";
-    weight = 0.05; // Add 5% to UP confidence
+    weight = 0.015; // Suavizado para não travar o robô
   } else if (dTrend === "BEARISH" && wTrend === "BEARISH") {
     bias = "STRONG_BEARISH";
-    weight = -0.05; // Subtract 5% from UP confidence (add to DOWN)
+    weight = -0.015;
   } else if (dTrend === "BULLISH") {
     bias = "BULLISH";
-    weight = 0.02;
+    weight = 0.005;
   } else if (dTrend === "BEARISH") {
     bias = "BEARISH";
-    weight = -0.02;
+    weight = -0.005;
   }
 
   return {
