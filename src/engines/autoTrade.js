@@ -3,7 +3,7 @@ import { appendCsvRow } from "../utils.js";
 import { ClobClient, SignatureType } from "@polymarket/clob-client";
 import { fetchEventBySlug } from "../data/polymarket.js";
 import { getWalletBalance } from "../data/walletBalance.js";
-import { Wallet } from "ethers";
+import { Wallet, utils } from "ethers";
 import fs from 'fs';
 import { SafetyAudit } from "./safetyAudit.js";
 
@@ -31,7 +31,7 @@ async function getClobClient() {
   let funder = cfg.funderAddress;
   if (funder) {
     try {
-      funder = ethers.utils.getAddress(funder);
+      funder = utils.getAddress(funder);
     } catch (e) {
       console.error(`  [⚠️] Endereço de funder inválido: ${funder}`);
     }
