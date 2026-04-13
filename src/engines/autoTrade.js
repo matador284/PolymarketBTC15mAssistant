@@ -220,13 +220,8 @@ export async function executeTrade({
   const mode = cfg.dryRun ? "DRY_RUN" : "LIVE";
   const now = new Date();
 
-  // Price for the order: 
-  // In binary markets, if we want to buy at outcomePrice (e.g. 0.50), 
-  // we can place a limit order slightly above to ensure fill (e.g., 0.52).
-  // Or just use the outcomePrice.
-  const orderPrice = outcomePrice ? Math.min(0.99, outcomePrice + 0.01) : 0.50;
-  // Size is amount_usd / orderPrice
-  const orderSize = Math.floor(amount / orderPrice);
+  // Usa Market Order: passa o valor em USD diretamente (min $1)
+  // Muito mais simples e confiavel para mercados de 5m
 
   const tradeRecord = {
     timestamp: now.toISOString(),
@@ -280,22 +275,14 @@ export async function executeTrade({
   // ──── LIVE TRADE EXECUTION ────
   try {
     // 1. Checagem de Saldo (USDC)
-    const wallet = await getWalletBalance();
-    if (!wallet.ok || wallet.usdc < amount) {
-      throw new Error(`Insufficient funds: Need $${amount}, have $${wallet.usdc?.toFixed(2) || "0.00"}`);
-    }
-
     const client = await getClobClient();
     
-    // Check balance before (optional but good)
-    // const status = await client.getApiKeyStatus();
-    
-    // Create and post order
-    const orderResp = await client.createAndPostOrder({
+    // Market Order: passa o valor em USD diretamente
+    // Para BUY: amount = dolares a gastar (min $1)
+    const orderResp = await client.createAndPostMarketOrder({
       tokenID: tokenId,
-      price: orderPrice,
-      size: orderSize,
-      side: "BUY", // In Polymarket, you always 'BUY' the outcome (Yes or No)
+      side: "BUY",
+      amount: Math.max(1, amount), // garante minimo de $1
     });
 
     tradeRecord.status = orderResp.success ? "LIVE_EXECUTED" : `LIVE_FAILED: ${orderResp.errorMessage || orderResp.error || "Unknown"}`;
