@@ -11,6 +11,10 @@ const port = 3000;
 
 app.use(express.static(path.join(__dirname, "public")));
 
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 app.get("/api/trades", (req, res) => {
   try {
     const csvPath = path.join(__dirname, "../logs/auto_trades.csv");
