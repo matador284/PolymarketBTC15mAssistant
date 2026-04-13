@@ -12,9 +12,9 @@ echo - Os filtros de seguranca (Falso Topo/Trend) continuam ativos!
 echo - Agora as confiancas estao bem mais realistas para o bot ATIRAR.
 echo =======================================================
 echo.
-set /p custom_amount="Qual valor em USD voce deseja por entrada? (Aperte ENTER para usar o padrao de $10): "
+set /p custom_amount="Qual valor em USD voce deseja por entrada? (Aperte ENTER para usar o padrao de $1): "
 if "%custom_amount%"=="" (
-    set AUTO_TRADE_AMOUNT_USD=10
+    set AUTO_TRADE_AMOUNT_USD=1
 ) else (
     set AUTO_TRADE_AMOUNT_USD=%custom_amount%
 )
@@ -61,6 +61,7 @@ if "%mode%"=="1" (
     echo Opcao invalida. Vai carregar os padroes normais do seu arquivo .env.
 )
 
+echo.
 echo Aguarde, carregando motor de inteligencia...
 echo.
 
@@ -83,7 +84,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 ) else (
-    echo  [OK] API da Polymarket: CONECTADO E AUTORIZADO! ✓
+    echo  [OK] API da Polymarket: CONECTADO E AUTORIZADO!
     del temp_diagnostic.txt
 )
 echo.
